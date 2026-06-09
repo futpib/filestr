@@ -107,8 +107,13 @@ async fn main() -> Result<()> {
     let socket = args
         .socket
         .or_else(|| config.socket.clone())
+        .map(|p| paths::expand_path(&p))
         .unwrap_or_else(paths::socket_path);
-    let data_dir = config.data_dir.clone().unwrap_or_else(paths::data_dir);
+    let data_dir = config
+        .data_dir
+        .clone()
+        .map(|p| paths::expand_path(&p))
+        .unwrap_or_else(paths::data_dir);
     std::fs::create_dir_all(&data_dir)
         .with_context(|| format!("creating {}", data_dir.display()))?;
 

@@ -68,12 +68,12 @@ impl Index {
 pub async fn scan(config: &Config, store: &FsStore) -> Result<Index> {
     let mut files = Vec::new();
     for root in &config.share {
-        let base = &root.path;
+        let base = libfilestr::paths::expand_path(&root.path);
         if !base.is_dir() {
             tracing::warn!(root = %root.name, path = %base.display(), "share root missing, skipping");
             continue;
         }
-        for entry in walkdir::WalkDir::new(base).follow_links(false) {
+        for entry in walkdir::WalkDir::new(&base).follow_links(false) {
             let entry = match entry {
                 Ok(e) => e,
                 Err(e) => {
@@ -85,7 +85,7 @@ pub async fn scan(config: &Config, store: &FsStore) -> Result<Index> {
                 continue;
             }
             let abs = entry.path().to_path_buf();
-            let rel = match abs.strip_prefix(base) {
+            let rel = match abs.strip_prefix(&base) {
                 Ok(rel) => rel.to_string_lossy().replace('\\', "/"),
                 Err(_) => continue,
             };

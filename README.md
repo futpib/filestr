@@ -33,7 +33,7 @@ filestrd -v                      # foreground daemon (or use filestrd.service)
 # share something: ~/.config/filestr/config.toml
 #   [[share]]
 #   name = "music"
-#   path = "/home/me/music"
+#   path = "~/music"          # ~ and $VAR / ${VAR} are expanded
 filestrctl rescan
 
 filestrctl invite create --label alice    # prints a filestr1… ticket; send it

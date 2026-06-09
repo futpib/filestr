@@ -327,7 +327,12 @@ async fn handle_share_list(state: &Arc<State>) -> Result<ResponseBody> {
         .iter()
         .map(|s| {
             let (files, bytes) = stats.get(&s.name).copied().unwrap_or((0, 0));
-            ShareInfo { name: s.name.clone(), path: s.path.clone(), files, bytes }
+            ShareInfo {
+                name: s.name.clone(),
+                path: libfilestr::paths::expand_path(&s.path),
+                files,
+                bytes,
+            }
         })
         .collect();
     let mut views: Vec<ViewInfo> = vec![ViewInfo {

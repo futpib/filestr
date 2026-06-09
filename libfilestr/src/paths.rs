@@ -47,3 +47,61 @@ pub fn data_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
         .join("filestr")
 }
+
+/// Expand `~` (or `~/...`) to the home directory and `$VAR` / `${VAR}` to
+/// environment values in a config path. Unknown variables are left as-is.
+/// Mirrors slopd's `expand_path` so config files behave the same: the shell
+/// does not expand paths read from a file, so we do it here.
+pub fn expand_path(path: &std::path::Path) -> PathBuf {
+    let s = path.to_string_lossy();
+    let expanded = shellexpand::full_with_context_no_errors(
+        s.as_ref(),
+        || dirs::home_dir().and_then(|p| p.into_os_string().into_string().ok()),
+        |var| std::env::var(var).ok(),
+    );
+    PathBuf::from(expanded.as_ref())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn tilde_alone() {
+        if let Some(home) = dirs::home_dir() {
+            assert_eq!(expand_path(Path::new("~")), home);
+        }
+    }
+
+    #[test]
+    fn tilde_slash() {
+        if let Some(home) = dirs::home_dir() {
+            assert_eq!(expand_path(Path::new("~/music")), home.join("music"));
+        }
+    }
+
+    #[test]
+    fn dollar_var() {
+        // SAFETY: single-threaded test process.
+        unsafe { std::env::set_var("FILESTR_TEST_SHARE", "/srv/share") };
+        assert_eq!(expand_path(Path::new("$FILESTR_TEST_SHARE/a")), PathBuf::from("/srv/share/a"));
+        assert_eq!(
+            expand_path(Path::new("${FILESTR_TEST_SHARE}/b")),
+            PathBuf::from("/srv/share/b")
+        );
+    }
+
+    #[test]
+    fn absolute_unchanged() {
+        assert_eq!(expand_path(Path::new("/absolute/path")), PathBuf::from("/absolute/path"));
+    }
+
+    #[test]
+    fn unknown_var_left_as_is() {
+        assert_eq!(
+            expand_path(Path::new("/base/$FILESTR_NONEXISTENT_XYZ/end")),
+            PathBuf::from("/base/$FILESTR_NONEXISTENT_XYZ/end")
+        );
+    }
+}
