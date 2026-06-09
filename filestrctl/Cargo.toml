@@ -1,0 +1,14 @@
+[package]
+name = "filestrctl"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow = "1.0.102"
+clap = { version = "4.6.1", features = ["derive"] }
+libfilestr = { path = "../libfilestr" }
+libfilestrctl = { path = "../libfilestrctl" }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+tokio = { version = "1.52.3", features = ["rt-multi-thread", "macros", "net", "io-util", "io-std", "fs", "signal"] }

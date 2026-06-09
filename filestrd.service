@@ -1,0 +1,10 @@
+[Unit]
+Description=filestrd — friend-to-friend file sharing daemon
+
+[Service]
+ExecStart=%h/.cargo/bin/filestrd
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

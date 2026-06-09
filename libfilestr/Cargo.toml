@@ -1,0 +1,13 @@
+[package]
+name = "libfilestr"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+data-encoding = "2.11.0"
+dirs = "6.0.0"
+rand = "0.10.1"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+toml = "1.1.2"
