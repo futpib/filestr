@@ -32,10 +32,14 @@ pub struct RootKey {
 
 impl RootKey {
     /// Load the nsec (or raw hex) from `path`, generating and persisting one
-    /// (as an nsec, 0600) on first use.
+    /// (as an nsec, 0600) on first use. Refuses an existing file whose
+    /// permissions are too open (SSH `StrictModes` behaviour).
     pub fn load_or_create(path: &Path) -> Result<Self> {
         match std::fs::read_to_string(path) {
-            Ok(text) => Self::parse(text.trim()),
+            Ok(text) => {
+                ensure_secure_perms(path)?;
+                Self::parse(text.trim())
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 let secret = generate_scalar();
                 let root = Self { secret };
@@ -109,6 +113,43 @@ fn generate_scalar() -> [u8; 32] {
     }
 }
 
+/// Refuse a secret file that group/others can access, the way SSH rejects an
+/// over-permissive private key. No-op on non-unix.
+pub fn ensure_secure_perms(path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(path)
+            .with_context(|| format!("stat {}", path.display()))?
+            .permissions()
+            .mode()
+            & 0o777;
+        if mode & 0o077 != 0 {
+            return Err(anyhow!(
+                "permissions {:#o} for {} are too open — group/others can access this secret.\n\
+                 Fix it: chmod 600 {}",
+                mode,
+                path.display(),
+                path.display(),
+            ));
+        }
+    }
+    let _ = path;
+    Ok(())
+}
+
+/// Create `dir` if missing and lock it to 0700 (owner-only), like `~/.ssh`.
+pub fn ensure_private_dir(dir: &Path) -> Result<()> {
+    std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))
+            .with_context(|| format!("locking {} to 0700", dir.display()))?;
+    }
+    Ok(())
+}
+
 /// Write `text` to `path` with 0600 perms.
 pub fn write_secret(path: &Path, text: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
@@ -162,5 +203,26 @@ mod tests {
         for _ in 0..100 {
             assert!(is_valid_scalar(&generate_scalar()));
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn refuses_world_readable_secret() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("filestr-perm-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("identity.key");
+        std::fs::write(&path, "x").unwrap();
+
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        assert!(ensure_secure_perms(&path).is_ok());
+
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(ensure_secure_perms(&path).is_err(), "0644 must be rejected");
+
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o660)).unwrap();
+        assert!(ensure_secure_perms(&path).is_err(), "group-accessible must be rejected");
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

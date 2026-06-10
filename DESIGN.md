@@ -36,7 +36,9 @@ The node's **root secret is its nostr identity** — a secp256k1 key stored as a
 | nostr identity (root) | secp256k1 | stored `nsec` in `identity.key` | Marmot/MLS hubs, member id |
 | iroh endpoint | ed25519 | `BLAKE3-derive_key("…iroh transport key v1", nsec_bytes)` | QUIC connections, grants, transfers |
 
-**Storage.** `identity.key` holds one `nsec1…` (also accepts raw hex), 0600, under the data dir; generated on first run (rejection-sampled to a valid secp256k1 scalar). Nothing else is persisted — the iroh key is recomputed each start. The derivation is one-way: the iroh key never reveals the nsec.
+**Storage.** `identity.key` holds one `nsec1…` (also accepts raw hex), under the data dir; generated on first run (rejection-sampled to a valid secp256k1 scalar). Nothing else is persisted — the iroh key is recomputed each start. The derivation is one-way: the iroh key never reveals the nsec.
+
+**Strict permissions (SSH-style).** Secret files are written `0600` and the data dir is locked to `0700`. On load, a secret file that group/others can access is **refused** with a fix hint (`chmod 600 …`) — the same `StrictModes` stance as OpenSSH, so a careless `chmod` can't silently expose your identity.
 
 **Override.** Drop a hex 32-byte `iroh.key` next to `identity.key` and it takes precedence for the endpoint identity (the nsec still drives the nostr identity). Use this to pin a pre-existing endpoint id — and the tickets that reference it — while the nsec drives the rest. Conversely, to adopt an existing nostr identity, just write your `nsec` into `identity.key`.
 

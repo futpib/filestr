@@ -62,6 +62,7 @@ fn load_iroh_key(data_dir: &std::path::Path, root: &RootKey) -> Result<SecretKey
     let override_path = data_dir.join("iroh.key");
     match std::fs::read_to_string(&override_path) {
         Ok(text) => {
+            libfilestr::keys::ensure_secure_perms(&override_path)?;
             let bytes = data_encoding::HEXLOWER
                 .decode(text.trim().as_bytes())
                 .context("iroh.key is not valid hex")?;
@@ -114,8 +115,8 @@ async fn main() -> Result<()> {
         .clone()
         .map(|p| paths::expand_path(&p))
         .unwrap_or_else(paths::data_dir);
-    std::fs::create_dir_all(&data_dir)
-        .with_context(|| format!("creating {}", data_dir.display()))?;
+    // the data dir holds secrets (identity.key) and grant tokens — lock it down
+    libfilestr::keys::ensure_private_dir(&data_dir)?;
 
     let root = RootKey::load_or_create(&data_dir.join("identity.key"))
         .context("loading identity key")?;
