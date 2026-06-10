@@ -220,7 +220,10 @@ async fn main() -> Result<()> {
     let ctl_task = tokio::spawn(ctl_server::run(state.clone(), socket.clone()));
 
     #[cfg(feature = "chat")]
-    crate::chat::spawn_relay_listener(state.clone()).await;
+    {
+        crate::chat::spawn_relay_listener(state.clone()).await;
+        crate::chat::spawn_dm_listener(state.clone()).await;
+    }
 
     let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;

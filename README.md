@@ -47,7 +47,14 @@ filestrctl rescan
 filestrctl invite create --label alice    # prints a filestr1… ticket; send it
                                           # to Alice over any channel you trust
 
-# on Alice's node:
+# discover + join a hub over nostr (no hand-passed ticket):
+filestrctl hub announce general           # owner: publish a discoverable note
+filestrctl hub discover                   # newcomer: list hubs seen on relays
+filestrctl hub request --hub <ref> --to <owner-npub>   # send a join request
+filestrctl hub pending                    # owner: review requests (if not auto)
+#   set [chat] auto_admit = true for open hubs
+
+# on Alice's node (file peering, no chat):
 filestrctl peer add filestr1… --label bob
 filestrctl browse bob                     # bob's file list (her view of it)
 filestrctl search led zeppelin            # searches the whole grant graph

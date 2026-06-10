@@ -207,6 +207,10 @@ The `nostr` stream type tunnels the nostr relay protocol (NIP-01 client↔relay 
 
 The `hub` request is a small control RPC (opaque to the wire layer; the `chat` feature defines the payload) used for the join handshake — carrying the joiner's MLS key package + reciprocal invite and returning the MLS welcome.
 
+**Discover + request-to-join (over nostr).** A hub owner can `announce` a hub — a discoverable nostr event (kind 39010, addressable) carrying the hub name, MLS group ref, owner pubkey, and relays. A newcomer runs `discover` to list announced hubs from its relays, then sends a join **request ticket** (`filestrreq1…`, §below) to the owner as a NIP-44-encrypted DM (kind 39011) over a relay both can reach — *no prior grant needed*. The owner's daemon subscribes for these DMs, decrypts them, and either **auto-admits** (`[chat].auto_admit`, open-hub UX) or queues them for `hub pending` / manual `hub admit`. Admit reuses the request/admit flow: add to MLS, redeem the reciprocal share-to-join grant, and push the welcome + an owner→member invite back over iroh.
+
+The **request ticket** is self-contained (reciprocal invite + MLS key package + optional target hub), so the same artifact works pasted out-of-band *or* carried over nostr. (Hardening: full NIP-17 gift-wrap for sender anonymity; gating auto-admit on the reputation/vouch policy.)
+
 **Configurable nostr relays.** The chat plane's relays are configurable under `[chat]`:
 - `embedded_relay` (default true) — serve the embedded relay over the iroh `nostr` stream.
 - `relay_listen` (e.g. `"127.0.0.1:7777"`) — additionally expose the embedded relay as a **standard WebSocket NIP-01 relay**, so ordinary nostr clients (or other filestr nodes) can use this node as a relay.

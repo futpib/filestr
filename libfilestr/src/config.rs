@@ -193,11 +193,19 @@ pub struct ChatConfig {
     /// External nostr relay URLs (ws:// or wss://) to also publish hub events
     /// to and read them from, and to advertise in hub metadata.
     pub relays: Vec<String>,
+    /// Auto-admit join requests that arrive over nostr (open-hub UX). When
+    /// false, requests are queued for manual `hub admit`.
+    pub auto_admit: bool,
 }
 
 impl Default for ChatConfig {
     fn default() -> Self {
-        Self { embedded_relay: true, relay_listen: None, relays: Vec::new() }
+        Self {
+            embedded_relay: true,
+            relay_listen: None,
+            relays: Vec::new(),
+            auto_admit: false,
+        }
     }
 }
 

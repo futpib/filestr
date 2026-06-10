@@ -93,13 +93,19 @@ enum HubCommand {
     Invite { hub: String },
     /// Join a hub from a filestrhub1… ticket
     Join { ticket: String },
-    /// Produce a join-request ticket to send to a hub owner
+    /// Produce a join-request ticket (optionally sent to an owner over nostr)
     Request {
         /// Target hub (group-ref) — optional; the owner can also choose
         #[arg(long)]
         hub: Option<String>,
         #[arg(long)]
         label: Option<String>,
+        /// Owner pubkey (npub/hex) to deliver the request to over nostr
+        #[arg(long)]
+        to: Option<String>,
+        /// Relay to send the request through (defaults to configured relays)
+        #[arg(long)]
+        relay: Option<String>,
     },
     /// Admit a join-request ticket into a hub you own
     Admit {
@@ -108,6 +114,12 @@ enum HubCommand {
         #[arg(long)]
         hub: Option<String>,
     },
+    /// Publish a public announcement for a hub you own
+    Announce { hub: String },
+    /// Discover hubs announced on your configured relays
+    Discover,
+    /// List join requests received over nostr awaiting admit
+    Pending,
     /// List hubs you own or have joined
     Ls,
     /// List a hub's members
@@ -546,16 +558,60 @@ async fn run_hub(client: &mut Client, json: bool, command: HubCommand) -> Result
                 println!("joined hub {} ({})", hub.name, hub.group_ref);
             }
         }
-        HubCommand::Request { hub, label } => {
-            let response = client.roundtrip(RequestBody::HubRequest { hub, label }).await?;
+        HubCommand::Request { hub, label, to, relay } => {
+            let sent = to.is_some();
+            let response =
+                client.roundtrip(RequestBody::HubRequest { hub, label, to, relay }).await?;
             let ResponseBody::HubRequestTicket { ticket } = response else {
                 bail!("unexpected response")
             };
             if json {
-                print_json(&serde_json::json!({ "ticket": ticket }));
+                print_json(&serde_json::json!({ "ticket": ticket, "sent": sent }));
+            } else if sent {
+                eprintln!("request sent to the owner over nostr");
+                println!("{ticket}");
             } else {
                 println!("{ticket}");
                 eprintln!("send this to the hub owner; they run: filestrctl hub admit <ticket>");
+            }
+        }
+        HubCommand::Announce { hub } => {
+            let response = client.roundtrip(RequestBody::HubAnnounce { hub }).await?;
+            let ResponseBody::HubAnnounced = response else { bail!("unexpected response") };
+            if !json {
+                println!("announced");
+            }
+        }
+        HubCommand::Discover => {
+            let response = client.roundtrip(RequestBody::HubDiscover).await?;
+            let ResponseBody::HubDiscovered { hubs } = response else {
+                bail!("unexpected response")
+            };
+            if json {
+                print_json(&hubs);
+            } else {
+                for h in hubs {
+                    println!(
+                        "{:<20} owner={} relays=[{}]\n  ref={}",
+                        h.name,
+                        &h.owner[..h.owner.len().min(16)],
+                        h.relays.join(", "),
+                        h.group_ref
+                    );
+                }
+            }
+        }
+        HubCommand::Pending => {
+            let response = client.roundtrip(RequestBody::HubPending).await?;
+            let ResponseBody::HubPending { requests } = response else {
+                bail!("unexpected response")
+            };
+            if json {
+                print_json(&requests);
+            } else {
+                for r in requests {
+                    println!("from {}\n  admit: filestrctl hub admit {}", &r.from[..r.from.len().min(16)], r.ticket);
+                }
             }
         }
         HubCommand::Admit { ticket, hub } => {

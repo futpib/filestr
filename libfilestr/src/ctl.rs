@@ -97,12 +97,17 @@ pub enum RequestBody {
     HubJoin {
         ticket: String,
     },
-    /// Produce a join-request ticket (`filestrreq1…`) to send to a hub owner.
+    /// Produce a join-request ticket (`filestrreq1…`), optionally delivering it
+    /// to a hub owner over nostr (`to` = owner npub/hex, `relay` = where).
     HubRequest {
         #[serde(default)]
         hub: Option<String>,
         #[serde(default)]
         label: Option<String>,
+        #[serde(default)]
+        to: Option<String>,
+        #[serde(default)]
+        relay: Option<String>,
     },
     /// Admit a join-request ticket into a hub we own.
     HubAdmit {
@@ -110,6 +115,14 @@ pub enum RequestBody {
         #[serde(default)]
         hub: Option<String>,
     },
+    /// Publish a public announcement for a hub we own.
+    HubAnnounce {
+        hub: String,
+    },
+    /// Discover hubs announced on the configured relays.
+    HubDiscover,
+    /// List join requests received over nostr awaiting manual admit.
+    HubPending,
     /// List hubs we own or have joined.
     HubList,
     /// List a hub's members (nostr pubkeys).
@@ -156,6 +169,9 @@ pub enum ResponseBody {
     HubJoined { hub: HubInfo },
     HubRequestTicket { ticket: String },
     HubAdmitted { hub: HubInfo },
+    HubAnnounced,
+    HubDiscovered { hubs: Vec<HubAnnouncement> },
+    HubPending { requests: Vec<PendingRequest> },
     Hubs { hubs: Vec<HubInfo> },
     HubMembers { members: Vec<String> },
     HubSent,
@@ -257,6 +273,25 @@ pub struct HubInfo {
     /// True if this node owns the hub (hosts its relay).
     pub owner: bool,
     pub members: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HubAnnouncement {
+    pub name: String,
+    /// MLS group ref (the hub handle).
+    pub group_ref: String,
+    /// Owner nostr pubkey (hex) — send your join request here.
+    pub owner: String,
+    /// Relays to reach the owner on.
+    pub relays: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingRequest {
+    /// Requester nostr pubkey (hex).
+    pub from: String,
+    /// The `filestrreq1…` ticket to pass to `hub admit`.
+    pub ticket: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

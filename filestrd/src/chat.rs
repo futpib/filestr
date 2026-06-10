@@ -15,7 +15,8 @@ use libfilestr::ctl::{ChatMessage, HubInfo};
 use libfilestr::grants::PeerIn;
 use libfilestr::p2p::{self, P2pRequest, P2pResponse};
 use libfilestr::ticket::Ticket;
-use nostr::{Event, Filter, JsonUtil, Kind, RelayUrl, UnsignedEvent};
+use nostr::nips::nip44;
+use nostr::{Event, EventBuilder, Filter, JsonUtil, Kind, PublicKey, RelayUrl, Tag, UnsignedEvent};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, BufReader};
 
@@ -28,11 +29,18 @@ use crate::state::State;
 const SYNTH_RELAY: &str = "ws://filestr.invalid";
 /// nostr kind of the MLS group-message wrapper (Marmot MIP-03).
 const KIND_GROUP_MESSAGE: u16 = 445;
+/// Public hub announcement (addressable, discoverable on nostr).
+const KIND_HUB_ANNOUNCE: u16 = 39010;
+/// Encrypted join-request DM carrying a `filestrreq1…` ticket to the owner.
+const KIND_HUB_DM: u16 = 39011;
 
 pub struct ChatState {
     pub mls: std::sync::Mutex<Mls>,
     pub relay: Arc<Relay>,
     pub hubs: tokio::sync::Mutex<HashMap<String, HubRecord>>,
+    /// Join requests received over nostr awaiting manual admit (when
+    /// auto-admit is off). `(requester pubkey hex, request ticket)`.
+    pub pending: tokio::sync::Mutex<Vec<(String, String)>>,
     /// Where the hub registry (names, roles, how to reach owners) is persisted.
     hubs_path: std::path::PathBuf,
 }
@@ -64,6 +72,7 @@ impl ChatState {
             mls: std::sync::Mutex::new(mls),
             relay: Arc::new(Relay::new()),
             hubs: tokio::sync::Mutex::new(hubs),
+            pending: tokio::sync::Mutex::new(Vec::new()),
             hubs_path,
         })
     }
@@ -278,6 +287,8 @@ pub async fn request(
     state: &Arc<State>,
     hub: Option<String>,
     label: Option<String>,
+    to: Option<String>,
+    relay: Option<String>,
 ) -> Result<String> {
     let relays = hub_relays(state).await;
     let key_package = {
@@ -293,8 +304,20 @@ pub async fn request(
         None,
     )
     .await?;
-    let ticket = filestr_chat::ticket::RequestTicket { v: 0, reciprocal, key_package, hub, label };
-    Ok(ticket.encode())
+    let ticket = filestr_chat::ticket::RequestTicket {
+        v: 0,
+        reciprocal,
+        key_package,
+        hub: hub.clone(),
+        label,
+    };
+    let ticket_str = ticket.encode();
+    // optionally deliver it to the owner over nostr right away
+    if let Some(to) = to {
+        let owner = PublicKey::parse(&to).map_err(|e| anyhow!("bad owner pubkey {to:?}: {e}"))?;
+        send_request_dm(state, owner, &ticket_str, relay).await?;
+    }
+    Ok(ticket_str)
 }
 
 /// Owner side: admit a join-request ticket — add the requester to the hub and
@@ -343,6 +366,220 @@ pub async fn admit(
     hubs.get(&group_ref)
         .map(|r| hub_info(r, &group_ref, members))
         .ok_or_else(|| anyhow!("hub gone"))
+}
+
+/// Our nostr identity keypair.
+fn our_keys(state: &Arc<State>) -> nostr::Keys {
+    state.chat.mls.lock().unwrap().keys.clone()
+}
+
+fn announce_filter() -> Filter {
+    Filter::new().kind(Kind::Custom(KIND_HUB_ANNOUNCE))
+}
+
+/// Publish a public, discoverable announcement for a hub we own, so newcomers
+/// can find it on nostr and send a join request.
+pub async fn announce(state: &Arc<State>, hub: String) -> Result<()> {
+    let group_ref = resolve_owned_hub(state, Some(hub)).await?;
+    let name = {
+        let hubs = state.chat.hubs.lock().await;
+        hubs.get(&group_ref).map(|r| r.name.clone()).unwrap_or_default()
+    };
+    let keys = our_keys(state);
+    let relays = external_relays(state).await;
+    let content = serde_json::json!({
+        "name": name,
+        "group_ref": group_ref,
+        "owner": keys.public_key().to_hex(),
+        "relays": relays,
+    })
+    .to_string();
+    let event = EventBuilder::new(Kind::Custom(KIND_HUB_ANNOUNCE), content)
+        .tag(Tag::identifier(group_ref.clone()))
+        .sign_with_keys(&keys)
+        .context("sign announcement")?;
+
+    state.chat.relay.publish(event.clone());
+    for url in relays {
+        if let Err(e) = filestr_chat::transport::ws_publish(&url, event.clone()).await {
+            tracing::debug!("announce to {url} failed: {e:#}");
+        }
+    }
+    state.emit("hub_announced", serde_json::json!({ "group_ref": group_ref }));
+    Ok(())
+}
+
+/// Discover hubs announced on the configured relays.
+pub async fn discover(state: &Arc<State>) -> Result<Vec<libfilestr::ctl::HubAnnouncement>> {
+    let mut events = state.chat.relay.query(&[announce_filter()]);
+    for url in external_relays(state).await {
+        match filestr_chat::transport::ws_fetch(&url, vec![announce_filter()]).await {
+            Ok(mut more) => events.append(&mut more),
+            Err(e) => tracing::debug!("discover from {url} failed: {e:#}"),
+        }
+    }
+    let mut out: HashMap<String, libfilestr::ctl::HubAnnouncement> = HashMap::new();
+    for ev in events {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&ev.content) else { continue };
+        let group_ref = v.get("group_ref").and_then(|x| x.as_str()).unwrap_or("").to_string();
+        if group_ref.is_empty() {
+            continue;
+        }
+        out.insert(
+            group_ref.clone(),
+            libfilestr::ctl::HubAnnouncement {
+                name: v.get("name").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                group_ref,
+                owner: v.get("owner").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+                relays: v
+                    .get("relays")
+                    .and_then(|x| x.as_array())
+                    .map(|a| a.iter().filter_map(|u| u.as_str().map(String::from)).collect())
+                    .unwrap_or_default(),
+            },
+        );
+    }
+    let mut list: Vec<_> = out.into_values().collect();
+    list.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(list)
+}
+
+/// Send a join-request ticket to a hub owner as an encrypted nostr DM.
+async fn send_request_dm(
+    state: &Arc<State>,
+    owner: PublicKey,
+    ticket: &str,
+    relay_override: Option<String>,
+) -> Result<()> {
+    let keys = our_keys(state);
+    let content = nip44::encrypt(keys.secret_key(), &owner, ticket, nip44::Version::V2)
+        .map_err(|e| anyhow!("encrypt request dm: {e}"))?;
+    let event = EventBuilder::new(Kind::Custom(KIND_HUB_DM), content)
+        .tag(Tag::public_key(owner))
+        .sign_with_keys(&keys)
+        .context("sign request dm")?;
+    let urls = match relay_override {
+        Some(u) => vec![u],
+        None => external_relays(state).await,
+    };
+    if urls.is_empty() {
+        return Err(anyhow!("no relay to send the request to (pass --relay or configure [chat].relays)"));
+    }
+    let mut sent = false;
+    for url in urls {
+        match filestr_chat::transport::ws_publish(&url, event.clone()).await {
+            Ok(()) => sent = true,
+            Err(e) => tracing::debug!("send request dm to {url} failed: {e:#}"),
+        }
+    }
+    if sent { Ok(()) } else { Err(anyhow!("could not reach any relay to send the request")) }
+}
+
+/// List join requests received over nostr awaiting manual admit.
+pub async fn pending(state: &Arc<State>) -> Vec<(String, String)> {
+    state.chat.pending.lock().await.clone()
+}
+
+/// Owner-side: subscribe (in-process and on external relays) for encrypted
+/// join-request DMs, decrypt them, and auto-admit or queue per policy.
+pub async fn spawn_dm_listener(state: Arc<State>) {
+    let our_pub = our_keys(&state).public_key();
+    let seen: Arc<tokio::sync::Mutex<std::collections::HashSet<String>>> = Arc::default();
+
+    // in-process relay (catches DMs arriving via our own ws listener / tunnel)
+    {
+        let state = state.clone();
+        let seen = seen.clone();
+        let mut rx = state.chat.relay.subscribe();
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = state.shutdown.cancelled() => break,
+                    ev = rx.recv() => match ev {
+                        Ok(ev) => handle_dm(&state, ev, our_pub, &seen).await,
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(_) => break,
+                    }
+                }
+            }
+        });
+    }
+
+    // external relays (reconnecting long-lived subscriptions)
+    let filter = Filter::new().kind(Kind::Custom(KIND_HUB_DM)).pubkey(our_pub);
+    for url in external_relays(&state).await {
+        let state = state.clone();
+        let seen = seen.clone();
+        let filter = filter.clone();
+        tokio::spawn(async move {
+            loop {
+                if state.shutdown.is_cancelled() {
+                    break;
+                }
+                let (tx, mut rx) = tokio::sync::mpsc::channel::<Event>(32);
+                let sub = filestr_chat::transport::ws_subscribe(&url, vec![filter.clone()], tx);
+                tokio::pin!(sub);
+                loop {
+                    tokio::select! {
+                        _ = state.shutdown.cancelled() => return,
+                        _ = &mut sub => break,
+                        Some(ev) = rx.recv() => handle_dm(&state, ev, our_pub, &seen).await,
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+            }
+        });
+    }
+}
+
+async fn handle_dm(
+    state: &Arc<State>,
+    ev: Event,
+    our_pub: PublicKey,
+    seen: &Arc<tokio::sync::Mutex<std::collections::HashSet<String>>>,
+) {
+    if ev.kind != Kind::Custom(KIND_HUB_DM) {
+        return;
+    }
+    // addressed to us?
+    let to_us = ev.tags.iter().any(|t| {
+        t.as_slice().first().map(|k| k == "p").unwrap_or(false)
+            && t.as_slice().get(1).map(|v| v == &our_pub.to_hex()).unwrap_or(false)
+    });
+    if !to_us {
+        return;
+    }
+    {
+        let mut seen = seen.lock().await;
+        if !seen.insert(ev.id.to_hex()) {
+            return; // already handled (arrived via two relays)
+        }
+    }
+    let keys = our_keys(state);
+    let ticket = match nip44::decrypt(keys.secret_key(), &ev.pubkey, &ev.content) {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::debug!("dm decrypt failed: {e}");
+            return;
+        }
+    };
+    if !ticket.starts_with(filestr_chat::ticket::REQ_PREFIX) {
+        return;
+    }
+    let from = ev.pubkey.to_hex();
+    let auto = { state.config.read().await.chat.auto_admit };
+    if auto {
+        state.emit("join_request_auto", serde_json::json!({ "from": from }));
+        let state = state.clone();
+        tokio::spawn(async move {
+            if let Err(e) = admit(&state, ticket, None).await {
+                tracing::warn!("auto-admit failed: {e:#}");
+            }
+        });
+    } else {
+        state.chat.pending.lock().await.push((from.clone(), ticket));
+        state.emit("join_request_pending", serde_json::json!({ "from": from }));
+    }
 }
 
 /// Resolve which owned hub to admit into: the hint (group-ref prefix or name),

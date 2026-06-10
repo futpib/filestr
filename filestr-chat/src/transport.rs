@@ -195,6 +195,29 @@ pub async fn ws_fetch(url: &str, filters: Vec<Filter>) -> Result<Vec<Event>> {
     Ok(events)
 }
 
+/// Long-lived subscription to an external nostr relay: REQ `filters`, then
+/// forward every live event to `tx` until the stream closes or `tx` is
+/// dropped. One connection lifetime — callers reconnect if they want.
+pub async fn ws_subscribe(
+    url: &str,
+    filters: Vec<Filter>,
+    tx: tokio::sync::mpsc::Sender<Event>,
+) -> Result<()> {
+    let (mut ws, _) = tokio_tungstenite::connect_async(url)
+        .await
+        .with_context(|| format!("connecting to {url}"))?;
+    ws.send(Message::text(encode_req("sub", filters))).await?;
+    while let Some(msg) = ws.next().await {
+        let Ok(Message::Text(t)) = msg else { continue };
+        if let RelayItem::Event(ev) = parse_relay(t.as_str())
+            && tx.send(*ev).await.is_err()
+        {
+            break;
+        }
+    }
+    Ok(())
+}
+
 // --- codec helpers (member-side read loops) ---
 
 /// A NIP-01 REQ line subscribing `sub` to `filters`.

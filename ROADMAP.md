@@ -96,12 +96,16 @@ privacy properties."*
    by `test-persistence.sh` (groups, membership, history survive cold restart;
    db has no plaintext). `hub log` also no longer fails when the owner is
    offline — it returns stored history.
-2. **No discover + request-to-join over nostr** — the literal blocker for "see
-   it on nostr → join." Needs: a public hub announcement (note/profile), a
-   join-request channel (NIP-17 DM or a request event), and an owner-side
-   approve flow (with auto-approve policy, reusing the reputation/vouch layer).
+2. ~~**No discover + request-to-join over nostr**~~ **DONE** — `hub announce`
+   publishes a discoverable hub note; `hub discover` lists hubs from relays;
+   `hub request --to <owner>` sends the `filestrreq1…` ticket as a NIP-44
+   encrypted DM over a relay; the owner's daemon listens, decrypts, and either
+   auto-admits (`[chat].auto_admit`) or queues for `hub pending` / `hub admit`.
+   Verified by `test-hub-discover.sh` (announce → discover → request →
+   auto-admit, **no prior grant**). Hardening left: full NIP-17 gift-wrap for
+   sender anonymity, and gating auto-admit on the reputation/vouch policy.
 3. **Hub availability** — owner-offline kills join + sync; no multi-admin or
-   member relay federation.
+   member relay federation. *(Now the top open blocker.)*
 4. **Onboarding friction** — no packaged install (no AUR/binary release), no
    `share add`, no GUI/mobile, manual ticket paste.
 5. **Live updates + richer search/metadata** — for exploration to feel alive.
@@ -118,11 +122,13 @@ what's thin is the **public-facing onboarding and the always-on / GUI layer**.
 
 For the "see → join → share → explore" flow specifically:
 
-1. ~~**MLS persistence**~~ — **done** (see above).
-2. **nostr discover + request-to-join** — public hub announcement + NIP-17 join
-   request + owner approve (auto-approve gated by the existing
-   reputation/vouch policy). *Next up.*
+1. ~~**MLS persistence**~~ — **done**.
+2. ~~**nostr discover + request-to-join**~~ — **done** (announce / discover /
+   request-DM / auto-admit; built on the `filestrreq1` request ticket).
 3. **`share add` + packaged install** — remove the config-editing friction.
+   *Next up.*
 
-Items 1 and 2 together turn filestr from "an F2F tool you configure by hand"
-into "tap a hub on nostr and you're in."
+Items 1 and 2 are done: you can now find a hub on a relay and join it with a
+request, no hand-passed ticket. What's left for the full "tap and you're in"
+is reducing onboarding friction (3) and hub availability when the owner is
+offline.
