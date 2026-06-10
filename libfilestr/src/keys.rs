@@ -16,6 +16,9 @@ use bech32::Hrp;
 /// rotates the derived key.
 pub const CTX_IROH: &str = "filestr iroh transport key v1";
 
+/// BLAKE3 derivation context for the at-rest MLS storage encryption key.
+pub const CTX_MLS_DB: &str = "filestr mls storage key v1";
+
 const NSEC_HRP: &str = "nsec";
 
 /// secp256k1 group order (big-endian); a valid secret key is in `[1, N)`.
@@ -83,7 +86,12 @@ impl RootKey {
 
     /// Derive the iroh ed25519 transport key seed.
     pub fn derive_iroh(&self) -> [u8; 32] {
-        blake3::derive_key(CTX_IROH, &self.secret)
+        self.derive(CTX_IROH)
+    }
+
+    /// Derive a one-way 32-byte subkey for `context` (domain-separated).
+    pub fn derive(&self, context: &str) -> [u8; 32] {
+        blake3::derive_key(context, &self.secret)
     }
 }
 

@@ -33,8 +33,11 @@ pub struct ChatState {
     pub mls: std::sync::Mutex<Mls>,
     pub relay: Arc<Relay>,
     pub hubs: tokio::sync::Mutex<HashMap<String, HubRecord>>,
+    /// Where the hub registry (names, roles, how to reach owners) is persisted.
+    hubs_path: std::path::PathBuf,
 }
 
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct HubRecord {
     pub name: String,
     pub owner: bool,
@@ -43,11 +46,42 @@ pub struct HubRecord {
 }
 
 impl ChatState {
-    pub fn new(identity: Identity) -> Self {
-        Self {
-            mls: std::sync::Mutex::new(Mls::new(identity.keys)),
+    /// Open the chat state: the persistent encrypted MLS store plus the hub
+    /// registry, both under the state dir.
+    pub fn open(
+        identity: Identity,
+        mls_db: std::path::PathBuf,
+        mls_key: [u8; 32],
+        hubs_path: std::path::PathBuf,
+    ) -> Result<Self> {
+        let hubs: HashMap<String, HubRecord> = match std::fs::read(&hubs_path) {
+            Ok(bytes) => serde_json::from_slice(&bytes).context("parsing hubs.json")?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => HashMap::new(),
+            Err(e) => return Err(e).context("reading hubs.json"),
+        };
+        let mls = Mls::open(identity.keys, &mls_db, mls_key)?;
+        Ok(Self {
+            mls: std::sync::Mutex::new(mls),
             relay: Arc::new(Relay::new()),
-            hubs: tokio::sync::Mutex::new(HashMap::new()),
+            hubs: tokio::sync::Mutex::new(hubs),
+            hubs_path,
+        })
+    }
+
+    /// Persist the hub registry (call after create/join).
+    pub async fn save_hubs(&self) {
+        let snapshot = self.hubs.lock().await.clone();
+        let result = (|| -> Result<()> {
+            if let Some(parent) = self.hubs_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let tmp = self.hubs_path.with_extension("json.tmp");
+            std::fs::write(&tmp, serde_json::to_vec_pretty(&snapshot)?)?;
+            std::fs::rename(&tmp, &self.hubs_path)?;
+            Ok(())
+        })();
+        if let Err(e) = result {
+            tracing::warn!("saving hubs.json: {e:#}");
         }
     }
 }
@@ -152,6 +186,7 @@ pub async fn create(state: &Arc<State>, name: String) -> Result<HubInfo> {
     let record = HubRecord { name, owner: true, owner_peer: None };
     let info = hub_info(&record, &group_ref, 1);
     state.chat.hubs.lock().await.insert(group_ref.clone(), record);
+    state.chat.save_hubs().await;
     state.emit("hub_created", serde_json::json!({ "group_ref": group_ref }));
     Ok(info)
 }
@@ -224,6 +259,7 @@ pub async fn join(state: &Arc<State>, ticket_str: String) -> Result<HubInfo> {
     let members = members_count(state, &group_ref);
     let info = hub_info(&record, &group_ref, members);
     state.chat.hubs.lock().await.insert(group_ref.clone(), record);
+    state.chat.save_hubs().await;
     state.emit("hub_joined", serde_json::json!({ "group_ref": group_ref }));
     Ok(info)
 }
@@ -285,10 +321,15 @@ pub async fn log(state: &Arc<State>, hub: String) -> Result<Vec<ChatMessage>> {
         hubs.get(&group_ref).and_then(|r| r.owner_peer.clone())
     };
 
-    // gather group-message events from whichever relay we can reach
+    // gather group-message events from whichever relay we can reach; a
+    // failure here (e.g. the owner is offline) must not stop us returning the
+    // history already stored locally
     let mut events = match &owner_peer {
         None => state.chat.relay.query(&[message_filter()]),
-        Some(owner) => fetch_from_owner(state, owner).await?,
+        Some(owner) => fetch_from_owner(state, owner).await.unwrap_or_else(|e| {
+            tracing::debug!("fetch from owner failed: {e:#}");
+            Vec::new()
+        }),
     };
     // plus any configured external nostr relays
     for url in external_relays(state).await {

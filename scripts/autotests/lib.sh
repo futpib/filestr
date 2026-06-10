@@ -59,6 +59,26 @@ EOF
     die "daemon $name did not come up"
 }
 
+# restart_node <name> — kill and relaunch a node reusing its data/state dirs
+restart_node() {
+    local name="$1"
+    local dir="$TESTDIR/$name"
+    local pidvar="PID_${name}"
+    kill "${!pidvar}" 2>/dev/null || true
+    sleep 0.5
+    "$BIN/filestrd" --config "$dir/config.toml" -vv 2>> "$dir/daemon.log" &
+    PIDS+=($!)
+    declare -g "PID_${name}=$!"
+    local i
+    for i in $(seq 1 100); do
+        if "$BIN/filestrctl" --socket "$dir/ctl.sock" status > /dev/null 2>&1; then
+            return 0
+        fi
+        sleep 0.1
+    done
+    die "daemon $name did not restart"
+}
+
 fctl() {
     local name="$1"
     shift

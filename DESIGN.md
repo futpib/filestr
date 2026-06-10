@@ -45,7 +45,7 @@ The node's **root secret is its nostr identity** — a secp256k1 key stored as a
 | file(s) | base | dir |
 |---|---|---|
 | `identity.key`, `iroh.key` | `$XDG_DATA_HOME` | `…/filestr/` |
-| `grants.json` | `$XDG_STATE_HOME` | `…/filestr/` |
+| `grants.json`, `reputation.json`, `hubs.json`, `mls.sqlite` (encrypted) | `$XDG_STATE_HOME` | `…/filestr/` |
 | `blobs/` (regenerable by rescan) | `$XDG_CACHE_HOME` | `…/filestr/` |
 | control socket | `$XDG_RUNTIME_DIR` | `…/filestrd/filestrd.sock` |
 | `config.toml` | `$XDG_CONFIG_HOME` | `…/filestr/` |
@@ -110,7 +110,7 @@ Membership grants file access to the **owner only** (the reciprocal grant). Memb
 
 ### 4.x v1 scope
 
-Implemented: create, invite, join (with share-to-join), members, send, log, all E2EE over the iroh tunnel. Deferred: member removal/kick rekeying (an admin can revoke the file grant today, but MLS removal that locks a member out of future messages — `remove_members` is wired but not yet exposed via a kick command), member↔member relay federation (members reach the owner's relay only), and persistent MLS storage (see §12).
+Implemented: create, invite, join (with share-to-join), members, send, log, all E2EE over the iroh tunnel, with **persistent MLS state** — groups, membership, and history survive daemon restarts (`mdk-sqlite-storage`, SQLCipher-encrypted at rest with a key derived from the root, in the state dir). The hub registry (names, roles, how to reach owners) persists alongside it as `hubs.json`. Deferred: member removal/kick rekeying (an admin can revoke the file grant today, but MLS removal that locks a member out of future messages — `remove_members` is wired but not yet exposed via a kick command) and member↔member relay federation (members reach the owner's relay only).
 
 ### 4.2 Hub-level search fallback
 
@@ -264,7 +264,7 @@ Per-peer overrides let you, say, give a trusted friend an effectively unlimited 
 |---|---|---|
 | `iroh` | QUIC p2p endpoint | 1.0.0-rc — pin; API may still shift before 1.0 |
 | `iroh-blobs` | BLAKE3/bao verified streaming + provider/get over abstract streams | used as a library, carried inline on `filestr/0`; filestr gates access itself |
-| `mdk-core` + `mdk-memory-storage` (Marmot, on OpenMLS) | MLS hubs — groups, key packages, welcomes, messages | **`chat` feature**; audited 2026; spec still evolving — pinned at 0.8 |
+| `mdk-core` + `mdk-sqlite-storage` (Marmot, on OpenMLS) | MLS hubs — groups, key packages, welcomes, messages; persistent, SQLCipher-encrypted at rest | **`chat` feature**; audited 2026; spec still evolving — pinned at 0.8 |
 | `nostr` (rust-nostr) | nostr keys/events/filters, NIP-01 relay messages for §8.2 | **`chat` feature**, pinned at 0.44 |
 | `tokio-tungstenite` | WebSocket server/client for external/standard nostr relays | **`chat` feature** (wss via rustls) |
 | `serde_json` | wire encoding (p2p + control socket), grant persistence (atomic writes) | |
@@ -293,10 +293,9 @@ Per-peer overrides let you, say, give a trusted friend an effectively unlimited 
   relayed serves are billed exact bytes. Only the `served > limit` → deny lever
   is wired; throttle/search-only and quality signals (promise-keeping, stall
   rate) are designed but not yet enforced.
-- **Chat (§4):** MLS state uses `mdk-memory-storage`, so hubs are lost on
-  daemon restart; `mdk-sqlite-storage` is a drop-in for persistence. The hub
-  owner is the sole relay host (no member↔member federation yet), and MLS
-  member removal/kick is wired in the library but not yet exposed as a command.
+- **Chat (§4):** the hub owner is the sole relay host (no member↔member
+  federation yet), and MLS member removal/kick is wired in the library but not
+  yet exposed as a command.
 
 ## 13. Open questions
 

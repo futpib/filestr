@@ -4,9 +4,11 @@
 //! All MDK calls are synchronous and guarded by the storage's internal
 //! `RwLock`, so an `Mls` is safe to share behind a `Mutex` in the daemon.
 
+use std::path::Path;
+
 use anyhow::{Context, Result, anyhow};
 use mdk_core::prelude::*;
-use mdk_memory_storage::MdkMemoryStorage;
+use mdk_sqlite_storage::{EncryptionConfig, MdkSqliteStorage};
 use nostr::{Event, EventBuilder, Keys, Kind, PublicKey, RelayUrl, UnsignedEvent};
 
 /// MLS key package event kind (Marmot, addressable).
@@ -16,7 +18,7 @@ pub const KIND_KEY_PACKAGE: u16 = 30443;
 pub const KIND_CHAT: u16 = 9;
 
 pub struct Mls {
-    mdk: MDK<MdkMemoryStorage>,
+    mdk: MDK<MdkSqliteStorage>,
     pub keys: Keys,
 }
 
@@ -41,8 +43,15 @@ pub enum Processed {
 }
 
 impl Mls {
-    pub fn new(keys: Keys) -> Self {
-        Self { mdk: MDK::new(MdkMemoryStorage::default()), keys }
+    /// Open (or create) the persistent, at-rest-encrypted MLS store at
+    /// `db_path`, keyed by `db_key` (derive it from the node's root key).
+    pub fn open(keys: Keys, db_path: &Path, db_key: [u8; 32]) -> Result<Self> {
+        if let Some(parent) = db_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let storage = MdkSqliteStorage::new_with_key(db_path, EncryptionConfig::new(db_key))
+            .map_err(|e| anyhow!("open MLS store at {}: {e}", db_path.display()))?;
+        Ok(Self { mdk: MDK::new(storage), keys })
     }
 
     pub fn pubkey(&self) -> PublicKey {
@@ -214,8 +223,10 @@ mod tests {
     #[test]
     fn full_mls_roundtrip() {
         let relays = [RelayUrl::parse("ws://localhost:8080").unwrap()];
-        let owner = Mls::new(Keys::generate());
-        let member = Mls::new(Keys::generate());
+        let dir = std::env::temp_dir().join(format!("filestr-mls-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let owner = Mls::open(Keys::generate(), &dir.join("owner.sqlite"), [1u8; 32]).unwrap();
+        let member = Mls::open(Keys::generate(), &dir.join("member.sqlite"), [2u8; 32]).unwrap();
 
         // owner creates the hub, member publishes a key package, owner adds them
         let gid = owner.create_group("test hub", &relays).unwrap();
@@ -248,6 +259,33 @@ mod tests {
         // the single source of truth for the chat log.
         assert_eq!(owner.get_messages(&gid).unwrap().len(), 2);
         assert_eq!(member.get_messages(&gid).unwrap().len(), 2);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn state_survives_reopen() {
+        let relays = [RelayUrl::parse("ws://localhost:8080").unwrap()];
+        let dir =
+            std::env::temp_dir().join(format!("filestr-mls-reopen-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("owner.sqlite");
+        let keys = Keys::generate();
+
+        let gid = {
+            let owner = Mls::open(keys.clone(), &db, [9u8; 32]).unwrap();
+            let gid = owner.create_group("persistent", &relays).unwrap();
+            owner.create_message(&gid, "remember me").unwrap();
+            gid
+        };
+        // reopen the same encrypted db — the group and its messages persist
+        let reopened = Mls::open(keys, &db, [9u8; 32]).unwrap();
+        assert_eq!(reopened.members(&gid).unwrap().len(), 1);
+        let log = reopened.get_messages(&gid).unwrap();
+        assert_eq!(log.len(), 1);
+        assert_eq!(log[0].content, "remember me");
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
 

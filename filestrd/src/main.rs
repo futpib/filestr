@@ -176,8 +176,18 @@ async fn main() -> Result<()> {
         .context("loading reputation.json")?;
 
     #[cfg(feature = "chat")]
-    let chat_identity =
-        filestr_chat::Identity::from_root(&root).context("building nostr identity")?;
+    let chat_state = {
+        let identity =
+            filestr_chat::Identity::from_root(&root).context("building nostr identity")?;
+        let mls_key = root.derive(libfilestr::keys::CTX_MLS_DB);
+        crate::chat::ChatState::open(
+            identity,
+            state_dir.join("mls.sqlite"),
+            mls_key,
+            state_dir.join("hubs.json"),
+        )
+        .context("opening chat state")?
+    };
 
     let (events, _) = tokio::sync::broadcast::channel(256);
     let state = Arc::new(State {
@@ -196,7 +206,7 @@ async fn main() -> Result<()> {
             path: rep_path,
         }),
         #[cfg(feature = "chat")]
-        chat: crate::chat::ChatState::new(chat_identity),
+        chat: chat_state,
         events,
         shutdown: tokio_util::sync::CancellationToken::new(),
     });
