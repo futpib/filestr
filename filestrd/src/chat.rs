@@ -145,15 +145,22 @@ fn message_filter() -> Filter {
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum HubRpc {
-    /// A joiner asks the owner to add them: their MLS key package plus a
-    /// reciprocal file invite (share-to-join).
+    /// member → owner: a joiner asks the owner to add them with their MLS key
+    /// package plus a reciprocal file invite (share-to-join). Used by the
+    /// owner-initiated flow (the joiner redeemed a hub ticket first).
     Join { group_ref: String, key_package: String, reciprocal: String },
+    /// owner → member: the owner admits a join request and pushes the MLS
+    /// welcome plus an owner→member invite so the member can reach the relay.
+    Welcome { group_ref: String, hub_name: String, welcome: String, owner_invite: String },
 }
 
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum HubRpcReply {
+    /// reply to `Join`: the MLS welcome for the joiner.
     Welcome { welcome: String },
+    /// reply to `Welcome`: the member joined successfully.
+    Ok,
     Error { message: String },
 }
 
@@ -245,6 +252,7 @@ pub async fn join(state: &Arc<State>, ticket_str: String) -> Result<HubInfo> {
     let welcome_json = match reply {
         HubRpcReply::Welcome { welcome } => welcome,
         HubRpcReply::Error { message } => return Err(anyhow!("owner refused join: {message}")),
+        HubRpcReply::Ok => return Err(anyhow!("owner returned no welcome")),
     };
 
     // 4. join the MLS group from the welcome.
@@ -262,6 +270,98 @@ pub async fn join(state: &Arc<State>, ticket_str: String) -> Result<HubInfo> {
     state.chat.save_hubs().await;
     state.emit("hub_joined", serde_json::json!({ "group_ref": group_ref }));
     Ok(info)
+}
+
+/// Member side: produce a self-contained join-request ticket (`filestrreq1…`)
+/// the owner can `admit` — works pasted out-of-band or sent over nostr.
+pub async fn request(
+    state: &Arc<State>,
+    hub: Option<String>,
+    label: Option<String>,
+) -> Result<String> {
+    let relays = hub_relays(state).await;
+    let key_package = {
+        let mls = state.chat.mls.lock().unwrap();
+        mls.key_package_event(&relays)?.as_json()
+    };
+    // a reciprocal invite the owner redeems: dial-back + share-to-join
+    let (reciprocal, _) = ctl_server::mint_invite(
+        state,
+        None,
+        label.clone().or_else(|| Some("hub-request".to_string())),
+        None,
+        None,
+    )
+    .await?;
+    let ticket = filestr_chat::ticket::RequestTicket { v: 0, reciprocal, key_package, hub, label };
+    Ok(ticket.encode())
+}
+
+/// Owner side: admit a join-request ticket — add the requester to the hub and
+/// push them the welcome (which also hands them an owner→member invite).
+pub async fn admit(
+    state: &Arc<State>,
+    ticket_str: String,
+    hub_override: Option<String>,
+) -> Result<HubInfo> {
+    let req = filestr_chat::ticket::RequestTicket::parse(&ticket_str)?;
+    let group_ref = resolve_owned_hub(state, req.hub.clone().or(hub_override)).await?;
+
+    // add to MLS (+ redeem the reciprocal for share-to-join)
+    let reciprocal_json = serde_json::to_string(&req.reciprocal)?;
+    let welcome = add_member(state, &group_ref, &req.key_package, Some(&reciprocal_json)).await?;
+
+    // reach the requester (now allows us) to push the welcome + an owner invite
+    let member_peer = PeerIn {
+        node_id: req.reciprocal.id.clone(),
+        label: Some("hub-member".to_string()),
+        relay: req.reciprocal.relay.clone(),
+        ip: req.reciprocal.ip.clone(),
+        allow_reshare: false,
+        added_at: libfilestr::unix_now(),
+    };
+    let hub_name = {
+        let hubs = state.chat.hubs.lock().await;
+        hubs.get(&group_ref).map(|r| r.name.clone()).unwrap_or_default()
+    };
+    let (owner_invite, _) =
+        ctl_server::mint_invite(state, None, Some(format!("hub:{hub_name}")), None, None).await?;
+    let rpc = HubRpc::Welcome {
+        group_ref: group_ref.clone(),
+        hub_name,
+        welcome,
+        owner_invite: serde_json::to_string(&owner_invite)?,
+    };
+    match hub_rpc(state, &member_peer, &rpc).await? {
+        HubRpcReply::Ok => {}
+        HubRpcReply::Error { message } => return Err(anyhow!("member failed to join: {message}")),
+        other => return Err(anyhow!("unexpected admit reply: {}", serde_json::to_string(&other)?)),
+    }
+
+    let members = members_count(state, &group_ref);
+    let hubs = state.chat.hubs.lock().await;
+    hubs.get(&group_ref)
+        .map(|r| hub_info(r, &group_ref, members))
+        .ok_or_else(|| anyhow!("hub gone"))
+}
+
+/// Resolve which owned hub to admit into: the hint (group-ref prefix or name),
+/// or the sole owned hub if there's exactly one.
+async fn resolve_owned_hub(state: &Arc<State>, hint: Option<String>) -> Result<String> {
+    let hubs = state.chat.hubs.lock().await;
+    let owned: Vec<(&String, &HubRecord)> = hubs.iter().filter(|(_, r)| r.owner).collect();
+    match hint {
+        Some(h) => owned
+            .iter()
+            .find(|(g, r)| g.starts_with(&h) || r.name == h)
+            .map(|(g, _)| (*g).clone())
+            .ok_or_else(|| anyhow!("you don't own a hub matching {h:?}")),
+        None => match owned.len() {
+            1 => Ok(owned[0].0.clone()),
+            0 => Err(anyhow!("you own no hubs to admit into")),
+            n => Err(anyhow!("you own {n} hubs; pass --hub to choose")),
+        },
+    }
 }
 
 pub async fn list(state: &Arc<State>) -> Result<Vec<HubInfo>> {
@@ -359,44 +459,94 @@ pub async fn log(state: &Arc<State>, hub: String) -> Result<Vec<ChatMessage>> {
 
 pub async fn handle_hub_rpc(state: &Arc<State>, payload: &str) -> String {
     let reply = match serde_json::from_str::<HubRpc>(payload) {
-        Ok(rpc) => match handle_join(state, rpc).await {
-            Ok(welcome) => HubRpcReply::Welcome { welcome },
-            Err(e) => HubRpcReply::Error { message: format!("{e:#}") },
-        },
+        Ok(HubRpc::Join { group_ref, key_package, reciprocal }) => {
+            match add_member(state, &group_ref, &key_package, Some(&reciprocal)).await {
+                Ok(welcome) => HubRpcReply::Welcome { welcome },
+                Err(e) => HubRpcReply::Error { message: format!("{e:#}") },
+            }
+        }
+        Ok(HubRpc::Welcome { group_ref, hub_name, welcome, owner_invite }) => {
+            match handle_welcome(state, group_ref, hub_name, welcome, owner_invite).await {
+                Ok(()) => HubRpcReply::Ok,
+                Err(e) => HubRpcReply::Error { message: format!("{e:#}") },
+            }
+        }
         Err(e) => HubRpcReply::Error { message: format!("bad hub rpc: {e}") },
     };
     serde_json::to_string(&reply).unwrap_or_else(|_| "{\"type\":\"error\"}".into())
 }
 
-async fn handle_join(state: &Arc<State>, rpc: HubRpc) -> Result<String> {
-    let HubRpc::Join { group_ref, key_package, reciprocal } = rpc;
-
-    // we must own this hub
+/// Owner side: add a member to one of our hubs from their key package,
+/// optionally redeeming a reciprocal share-to-join invite. Returns the MLS
+/// welcome (JSON).
+async fn add_member(
+    state: &Arc<State>,
+    group_ref: &str,
+    key_package: &str,
+    reciprocal: Option<&str>,
+) -> Result<String> {
     {
         let hubs = state.chat.hubs.lock().await;
-        let rec = hubs.get(&group_ref).ok_or_else(|| anyhow!("unknown hub"))?;
+        let rec = hubs.get(group_ref).ok_or_else(|| anyhow!("unknown hub"))?;
         if !rec.owner {
             return Err(anyhow!("not the owner of this hub"));
         }
     }
-
-    // share-to-join: redeem the joiner's reciprocal invite so we can browse them
-    let reciprocal: Ticket =
-        serde_json::from_str(&reciprocal).context("parse reciprocal ticket")?;
-    if let Err(e) = ctl_server::redeem_ticket(state, reciprocal, Some("hub-member".to_string())).await {
-        tracing::warn!("share-to-join redeem failed: {e:#}");
+    if let Some(reciprocal) = reciprocal {
+        // share-to-join: redeem the joiner's reciprocal invite so we can browse them
+        let reciprocal: Ticket =
+            serde_json::from_str(reciprocal).context("parse reciprocal ticket")?;
+        if let Err(e) =
+            ctl_server::redeem_ticket(state, reciprocal, Some("hub-member".to_string())).await
+        {
+            tracing::warn!("share-to-join redeem failed: {e:#}");
+        }
     }
-
-    // add the member to the MLS group
-    let key_package: Event = Event::from_json(key_package.as_bytes()).context("parse key package")?;
+    let key_package: Event =
+        Event::from_json(key_package.as_bytes()).context("parse key package")?;
     let (welcome, evolution) = {
         let mls = state.chat.mls.lock().unwrap();
-        mls.add_member(&group_ref, &key_package)?
+        mls.add_member(group_ref, &key_package)?
     };
-    // publish the commit so other members advance when they next sync
     state.chat.relay.publish(evolution);
     state.emit("hub_member_added", serde_json::json!({ "group_ref": group_ref }));
     Ok(welcome.as_json())
+}
+
+/// Member side: handle an owner pushing us a welcome after admitting our
+/// request — join the MLS group and redeem the owner→member invite so we can
+/// reach the relay.
+async fn handle_welcome(
+    state: &Arc<State>,
+    _group_ref: String,
+    hub_name: String,
+    welcome: String,
+    owner_invite: String,
+) -> Result<()> {
+    let welcome: UnsignedEvent =
+        UnsignedEvent::from_json(welcome.as_bytes()).context("parse welcome")?;
+    let joined = {
+        let mls = state.chat.mls.lock().unwrap();
+        mls.join_from_welcome(&welcome)?
+    };
+    let owner_ticket: Ticket =
+        serde_json::from_str(&owner_invite).context("parse owner invite")?;
+    let owner_peer = PeerIn {
+        node_id: owner_ticket.id.clone(),
+        label: Some(format!("hub:{hub_name}")),
+        relay: owner_ticket.relay.clone(),
+        ip: owner_ticket.ip.clone(),
+        allow_reshare: false,
+        added_at: libfilestr::unix_now(),
+    };
+    ctl_server::redeem_ticket(state, owner_ticket, Some(format!("hub:{hub_name}")))
+        .await
+        .context("redeeming owner invite")?;
+    let record = HubRecord { name: hub_name, owner: false, owner_peer: Some(owner_peer) };
+    state.chat.hubs.lock().await.insert(joined.clone(), record);
+    state.chat.save_hubs().await;
+    state.emit("hub_joined", serde_json::json!({ "group_ref": joined }));
+    Ok(())
 }
 
 // === nostr-over-iroh: serve our relay on the `nostr` stream ===

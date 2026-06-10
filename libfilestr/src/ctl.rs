@@ -97,6 +97,19 @@ pub enum RequestBody {
     HubJoin {
         ticket: String,
     },
+    /// Produce a join-request ticket (`filestrreq1…`) to send to a hub owner.
+    HubRequest {
+        #[serde(default)]
+        hub: Option<String>,
+        #[serde(default)]
+        label: Option<String>,
+    },
+    /// Admit a join-request ticket into a hub we own.
+    HubAdmit {
+        ticket: String,
+        #[serde(default)]
+        hub: Option<String>,
+    },
     /// List hubs we own or have joined.
     HubList,
     /// List a hub's members (nostr pubkeys).
@@ -141,6 +154,8 @@ pub enum ResponseBody {
     HubCreated { hub: HubInfo },
     HubInvite { ticket: String },
     HubJoined { hub: HubInfo },
+    HubRequestTicket { ticket: String },
+    HubAdmitted { hub: HubInfo },
     Hubs { hubs: Vec<HubInfo> },
     HubMembers { members: Vec<String> },
     HubSent,

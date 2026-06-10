@@ -93,6 +93,21 @@ enum HubCommand {
     Invite { hub: String },
     /// Join a hub from a filestrhub1… ticket
     Join { ticket: String },
+    /// Produce a join-request ticket to send to a hub owner
+    Request {
+        /// Target hub (group-ref) — optional; the owner can also choose
+        #[arg(long)]
+        hub: Option<String>,
+        #[arg(long)]
+        label: Option<String>,
+    },
+    /// Admit a join-request ticket into a hub you own
+    Admit {
+        ticket: String,
+        /// Which of your hubs to admit into (if you own more than one)
+        #[arg(long)]
+        hub: Option<String>,
+    },
     /// List hubs you own or have joined
     Ls,
     /// List a hub's members
@@ -529,6 +544,29 @@ async fn run_hub(client: &mut Client, json: bool, command: HubCommand) -> Result
                 print_json(&hub);
             } else {
                 println!("joined hub {} ({})", hub.name, hub.group_ref);
+            }
+        }
+        HubCommand::Request { hub, label } => {
+            let response = client.roundtrip(RequestBody::HubRequest { hub, label }).await?;
+            let ResponseBody::HubRequestTicket { ticket } = response else {
+                bail!("unexpected response")
+            };
+            if json {
+                print_json(&serde_json::json!({ "ticket": ticket }));
+            } else {
+                println!("{ticket}");
+                eprintln!("send this to the hub owner; they run: filestrctl hub admit <ticket>");
+            }
+        }
+        HubCommand::Admit { ticket, hub } => {
+            let response = client.roundtrip(RequestBody::HubAdmit { ticket, hub }).await?;
+            let ResponseBody::HubAdmitted { hub } = response else {
+                bail!("unexpected response")
+            };
+            if json {
+                print_json(&hub);
+            } else {
+                println!("admitted into {} ({}); now {} members", hub.name, hub.group_ref, hub.members);
             }
         }
         HubCommand::Ls => {

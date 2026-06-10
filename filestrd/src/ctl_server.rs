@@ -133,6 +133,8 @@ async fn handle_simple(state: &Arc<State>, body: RequestBody) -> ResponseBody {
         RequestBody::HubCreate { name } => handle_hub_create(state, name).await,
         RequestBody::HubInvite { hub } => handle_hub_invite(state, hub).await,
         RequestBody::HubJoin { ticket } => handle_hub_join(state, ticket).await,
+        RequestBody::HubRequest { hub, label } => handle_hub_request(state, hub, label).await,
+        RequestBody::HubAdmit { ticket, hub } => handle_hub_admit(state, ticket, hub).await,
         RequestBody::HubList => handle_hub_list(state).await,
         RequestBody::HubMembers { hub } => handle_hub_members(state, hub).await,
         RequestBody::HubSend { hub, text } => handle_hub_send(state, hub, text).await,
@@ -571,6 +573,22 @@ async fn handle_hub_join(state: &Arc<State>, ticket: String) -> Result<ResponseB
     Ok(ResponseBody::HubJoined { hub: crate::chat::join(state, ticket).await? })
 }
 #[cfg(feature = "chat")]
+async fn handle_hub_request(
+    state: &Arc<State>,
+    hub: Option<String>,
+    label: Option<String>,
+) -> Result<ResponseBody> {
+    Ok(ResponseBody::HubRequestTicket { ticket: crate::chat::request(state, hub, label).await? })
+}
+#[cfg(feature = "chat")]
+async fn handle_hub_admit(
+    state: &Arc<State>,
+    ticket: String,
+    hub: Option<String>,
+) -> Result<ResponseBody> {
+    Ok(ResponseBody::HubAdmitted { hub: crate::chat::admit(state, ticket, hub).await? })
+}
+#[cfg(feature = "chat")]
 async fn handle_hub_list(state: &Arc<State>) -> Result<ResponseBody> {
     Ok(ResponseBody::Hubs { hubs: crate::chat::list(state).await? })
 }
@@ -598,6 +616,18 @@ async fn handle_hub_invite(_: &Arc<State>, _: String) -> Result<ResponseBody> {
 }
 #[cfg(not(feature = "chat"))]
 async fn handle_hub_join(_: &Arc<State>, _: String) -> Result<ResponseBody> {
+    Err(anyhow!("chat plane not enabled in this build"))
+}
+#[cfg(not(feature = "chat"))]
+async fn handle_hub_request(
+    _: &Arc<State>,
+    _: Option<String>,
+    _: Option<String>,
+) -> Result<ResponseBody> {
+    Err(anyhow!("chat plane not enabled in this build"))
+}
+#[cfg(not(feature = "chat"))]
+async fn handle_hub_admit(_: &Arc<State>, _: String, _: Option<String>) -> Result<ResponseBody> {
     Err(anyhow!("chat plane not enabled in this build"))
 }
 #[cfg(not(feature = "chat"))]
