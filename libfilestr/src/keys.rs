@@ -113,23 +113,37 @@ fn generate_scalar() -> [u8; 32] {
     }
 }
 
-/// Refuse a secret file that group/others can access, the way SSH rejects an
-/// over-permissive private key. No-op on non-unix.
+/// Refuse a secret file that is group/other-accessible or not owned by us —
+/// the way SSH rejects an over-permissive or wrong-owner private key
+/// (`StrictModes`). No-op on non-unix.
 pub fn ensure_secure_perms(path: &Path) -> Result<()> {
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        let mode = std::fs::metadata(path)
-            .with_context(|| format!("stat {}", path.display()))?
-            .permissions()
-            .mode()
-            & 0o777;
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let meta = std::fs::metadata(path).with_context(|| format!("stat {}", path.display()))?;
+
+        let mode = meta.permissions().mode() & 0o777;
         if mode & 0o077 != 0 {
             return Err(anyhow!(
                 "permissions {:#o} for {} are too open — group/others can access this secret.\n\
                  Fix it: chmod 600 {}",
                 mode,
                 path.display(),
+                path.display(),
+            ));
+        }
+
+        // owner must be us (or root, e.g. a system-managed deployment)
+        let euid = unsafe { libc::geteuid() };
+        let owner = meta.uid();
+        if owner != euid && owner != 0 {
+            return Err(anyhow!(
+                "{} is owned by uid {} but you are uid {} — refusing to use another user's secret.\n\
+                 Fix it: chown {} {}",
+                path.display(),
+                owner,
+                euid,
+                euid,
                 path.display(),
             ));
         }

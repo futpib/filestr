@@ -40,12 +40,25 @@ pub fn config_path() -> PathBuf {
         .join("filestr/config.toml")
 }
 
-/// Default data directory: `~/.local/share/filestr` (blob store, grants,
-/// secret key).
+/// Durable data directory: `$XDG_DATA_HOME/filestr` (the identity key — the
+/// one thing worth backing up).
 pub fn data_dir() -> PathBuf {
     dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("filestr")
+}
+
+/// State directory: `$XDG_STATE_HOME/filestr` (grants — mutable, persists, but
+/// not "data"). Falls back to the data dir where XDG state is unavailable.
+pub fn state_dir() -> PathBuf {
+    dirs::state_dir().map(|d| d.join("filestr")).unwrap_or_else(data_dir)
+}
+
+/// Cache directory: `$XDG_CACHE_HOME/filestr` (the blob store — reference
+/// imports of files that still live in the share roots, so it is regenerable
+/// by a rescan). Falls back to the data dir.
+pub fn cache_dir() -> PathBuf {
+    dirs::cache_dir().map(|d| d.join("filestr")).unwrap_or_else(data_dir)
 }
 
 /// Expand `~` (or `~/...`) to the home directory and `$VAR` / `${VAR}` to

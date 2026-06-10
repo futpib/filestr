@@ -38,7 +38,19 @@ The node's **root secret is its nostr identity** — a secp256k1 key stored as a
 
 **Storage.** `identity.key` holds one `nsec1…` (also accepts raw hex), under the data dir; generated on first run (rejection-sampled to a valid secp256k1 scalar). Nothing else is persisted — the iroh key is recomputed each start. The derivation is one-way: the iroh key never reveals the nsec.
 
-**Strict permissions (SSH-style).** Secret files are written `0600` and the data dir is locked to `0700`. On load, a secret file that group/others can access is **refused** with a fix hint (`chmod 600 …`) — the same `StrictModes` stance as OpenSSH, so a careless `chmod` can't silently expose your identity.
+**Strict permissions (SSH-style).** Secret files are written `0600` and every state dir is `0700`. On load, a secret file is **refused** if group/others can access it (`mode & 0o077`) *or* it isn't owned by us (uid ≠ our euid, and ≠ root) — the same `StrictModes` checks OpenSSH does, with a fix hint (`chmod 600` / `chown`).
+
+**XDG layout.** Paths follow the XDG Base Directory spec, split by durability:
+
+| file(s) | base | dir |
+|---|---|---|
+| `identity.key`, `iroh.key` | `$XDG_DATA_HOME` | `…/filestr/` |
+| `grants.json` | `$XDG_STATE_HOME` | `…/filestr/` |
+| `blobs/` (regenerable by rescan) | `$XDG_CACHE_HOME` | `…/filestr/` |
+| control socket | `$XDG_RUNTIME_DIR` | `…/filestrd/filestrd.sock` |
+| `config.toml` | `$XDG_CONFIG_HOME` | `…/filestr/` |
+
+So a backup of the data dir is the whole identity; clearing the cache just triggers a rescan; grants survive both. An explicit `data_dir` in the config collapses all three persistent dirs into one root (for single-dir or isolated deployments); grants found in the old data-dir location are migrated to the state dir on startup.
 
 **Override.** Drop a hex 32-byte `iroh.key` next to `identity.key` and it takes precedence for the endpoint identity (the nsec still drives the nostr identity). Use this to pin a pre-existing endpoint id — and the tickets that reference it — while the nsec drives the rest. Conversely, to adopt an existing nostr identity, just write your `nsec` into `identity.key`.
 

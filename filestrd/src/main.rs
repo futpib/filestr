@@ -110,18 +110,24 @@ async fn main() -> Result<()> {
         .or_else(|| config.socket.clone())
         .map(|p| paths::expand_path(&p))
         .unwrap_or_else(paths::socket_path);
-    let data_dir = config
-        .data_dir
-        .clone()
-        .map(|p| paths::expand_path(&p))
-        .unwrap_or_else(paths::data_dir);
-    // the data dir holds secrets (identity.key) and grant tokens — lock it down
-    libfilestr::keys::ensure_private_dir(&data_dir)?;
+    // XDG split: identity → data, grants → state, blobs → cache. An explicit
+    // `data_dir` config override collapses all three into one root (handy for
+    // single-dir or isolated/test deployments).
+    let (data_dir, state_dir, cache_dir) = match config.data_dir.clone() {
+        Some(p) => {
+            let d = paths::expand_path(&p);
+            (d.clone(), d.clone(), d)
+        }
+        None => (paths::data_dir(), paths::state_dir(), paths::cache_dir()),
+    };
+    for dir in [&data_dir, &state_dir, &cache_dir] {
+        libfilestr::keys::ensure_private_dir(dir)?;
+    }
 
     let root = RootKey::load_or_create(&data_dir.join("identity.key"))
         .context("loading identity key")?;
     let secret_key = load_iroh_key(&data_dir, &root)?;
-    let store = FsStore::load(data_dir.join("blobs")).await.context("opening blob store")?;
+    let store = FsStore::load(cache_dir.join("blobs")).await.context("opening blob store")?;
 
     let relay_mode = match config.relay {
         RelaySetting::Default => default_relay_mode(),
@@ -139,9 +145,19 @@ async fn main() -> Result<()> {
 
     let initial_index = index::scan(&config, &store).await?;
 
-    let grants_path = data_dir.join("grants.json");
-    let grants = libfilestr::grants::Grants::load_or_default(&grants_path)
-        .context("loading grants.json")?;
+    let grants_path = state_dir.join("grants.json");
+    // adopt grants from the pre-split location (data dir) if present
+    let legacy_grants = data_dir.join("grants.json");
+    let grants = if !grants_path.exists() && legacy_grants.exists() {
+        let g = libfilestr::grants::Grants::load_or_default(&legacy_grants)
+            .context("loading legacy grants.json")?;
+        g.save(&grants_path).context("migrating grants.json to state dir")?;
+        tracing::info!("migrated grants.json from data dir to state dir");
+        g
+    } else {
+        libfilestr::grants::Grants::load_or_default(&grants_path)
+            .context("loading grants.json")?
+    };
 
     #[cfg(feature = "chat")]
     let chat_identity =
