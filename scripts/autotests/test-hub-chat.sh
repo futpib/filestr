@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
 # Chat plane: real Marmot/MLS hub over the iroh nostr tunnel (no external
-# relay). Owner creates a hub, member joins, E2EE messages flow both ways,
-# joining auto-grants the owner file access (share-to-join). (PLAN.md M5)
+# relay). A single filestrhub1… ticket does BOTH: joins the chat AND peers the
+# files in both directions. Owner creates a hub, member joins, E2EE messages
+# flow both ways, and after joining each side can browse the other's share —
+# all from the one ticket. (PLAN.md M5)
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
-# member shares a file so we can prove share-to-join gives the owner access
+# both nodes share a file so we can prove file peering goes both directions
 start_node A --share          # A = hub owner
 start_node B --share          # B = member
+echo "owner-only file"   > "$TESTDIR/A/share/owner.txt"
 echo "members-only file" > "$TESTDIR/B/share/secret.txt"
+fctl A rescan > /dev/null
 fctl B rescan > /dev/null
 
 # owner creates a hub and mints a join ticket
@@ -38,11 +42,21 @@ fctl A --json hub log "$HUB" > "$TESTDIR/a-log.json" || die "owner log failed"
 jq -e '.[] | select(.content == "hi back from member")' "$TESTDIR/a-log.json" > /dev/null \
     || die "owner did not receive member's message; got: $(cat "$TESTDIR/a-log.json")"
 
-# share-to-join: the owner can now browse the member's files
+# the SAME hub ticket also peered the files, both directions:
+
+# (a) share-to-join — the owner can browse the member's files
 B_ID="$(node_id B)"
-fctl A --json browse "$B_ID" > "$TESTDIR/browse.json" 2>/dev/null \
+fctl A --json browse "$B_ID" > "$TESTDIR/a-browses-b.json" 2>/dev/null \
     || die "owner cannot browse member after hub join (share-to-join broken)"
-jq -e '.[] | select(.path | endswith("secret.txt"))' "$TESTDIR/browse.json" > /dev/null \
+jq -e '.[] | select(.path | endswith("secret.txt"))' "$TESTDIR/a-browses-b.json" > /dev/null \
     || die "owner does not see member's shared file"
+
+# (b) the member can browse the owner's files — from the same ticket, no extra
+#     peer add
+A_ID="$(node_id A)"
+fctl B --json browse "$A_ID" > "$TESTDIR/b-browses-a.json" 2>/dev/null \
+    || die "member cannot browse owner after hub join (file peering one-way only)"
+jq -e '.[] | select(.path | endswith("owner.txt"))' "$TESTDIR/b-browses-a.json" > /dev/null \
+    || die "member does not see owner's shared file"
 
 echo OK
