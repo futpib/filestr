@@ -300,9 +300,14 @@ pub(crate) async fn redeem_ticket(
         allow_reshare: false, // learned from the redeem response
         added_at: unix_now(),
     };
+    // symmetric: tell the grantor our address so they can reach our share too
+    let (my_relay, my_ip) = dialable_addr(state).await;
     let conn = search_mod::connect(state, &peer, libfilestr::p2p::ALPN).await?;
-    let mut reader =
-        search_mod::request(&conn, &P2pRequest::Redeem { token: ticket.token.clone() }).await?;
+    let mut reader = search_mod::request(
+        &conn,
+        &P2pRequest::Redeem { token: ticket.token.clone(), relay: my_relay, ip: my_ip },
+    )
+    .await?;
     let response = search_mod::read_response(&mut reader)
         .await?
         .ok_or_else(|| anyhow!("peer closed the stream without answering"))?;
@@ -317,6 +322,8 @@ pub(crate) async fn redeem_ticket(
             };
             let mut grants = state.grants.lock().await;
             grants.grants.upsert_peer(peer);
+            // symmetric: allow the grantor to reach our full share in return
+            grants.grants.allow(&ticket.id, VIEW_FULL.to_string(), true);
             grants.save()?;
             state.emit(
                 "peer_added",

@@ -145,7 +145,7 @@ async fn handle_stream(
             )
             .await?;
         }
-        P2pRequest::Redeem { token } => {
+        P2pRequest::Redeem { token, relay, ip } => {
             let redeemed = {
                 let mut grants = state.grants.lock().await;
                 let result = grants
@@ -153,6 +153,16 @@ async fn handle_stream(
                     .redeem(&token, &node_id)
                     .map(|g| (g.token_id.clone(), g.view.clone(), g.allow_reshare));
                 if result.is_some() {
+                    // symmetric: record the redeemer as a peer so we can reach
+                    // their share too
+                    grants.grants.upsert_peer(libfilestr::grants::PeerIn {
+                        node_id: node_id.clone(),
+                        label: Some("symmetric".to_string()),
+                        relay,
+                        ip,
+                        allow_reshare: true,
+                        added_at: libfilestr::unix_now(),
+                    });
                     grants.save()?;
                 }
                 result
@@ -287,7 +297,7 @@ async fn handle_stream(
                 P2pRequest::Hub { payload } => {
                     #[cfg(feature = "chat")]
                     {
-                        let reply = crate::chat::handle_hub_rpc(&state, &payload).await;
+                        let reply = crate::chat::handle_hub_rpc(&state, &node_id, &payload).await;
                         write_response(&mut send, &P2pResponse::HubReply { payload: reply }).await?;
                     }
                     #[cfg(not(feature = "chat"))]

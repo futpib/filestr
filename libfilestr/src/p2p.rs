@@ -42,8 +42,16 @@ pub enum P2pRequest {
     /// Version/feature negotiation; allowed from anyone.
     Hello,
     /// Present an invite token; the only other request allowed from
-    /// not-yet-granted nodes.
-    Redeem { token: String },
+    /// not-yet-granted nodes. Carries the redeemer's own dialable address so
+    /// the grantor can reach back — tickets are symmetric (both sides end up
+    /// granting each other).
+    Redeem {
+        token: String,
+        #[serde(default)]
+        relay: Vec<String>,
+        #[serde(default)]
+        ip: Vec<String>,
+    },
     /// Full file list for the caller's view.
     List,
     /// Streaming search. Results carry no origin attribution (§7.1).

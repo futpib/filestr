@@ -150,6 +150,25 @@ impl Grants {
         Some(&self.grants[i])
     }
 
+    /// Directly allow `node_id` (an active grant with no token) — the reverse
+    /// half of a symmetric redemption: we let the grantor reach our share too.
+    pub fn allow(&mut self, node_id: &str, view: String, allow_reshare: bool) {
+        if self.active_for(node_id).is_some() {
+            return;
+        }
+        self.grants.push(GrantOut {
+            token_id: token_id(node_id),
+            token: None,
+            label: Some("symmetric".to_string()),
+            view,
+            allow_reshare,
+            state: GrantState::Active,
+            node_id: Some(node_id.to_string()),
+            created_at: unix_now(),
+            expires_at: None,
+        });
+    }
+
     /// The active grant for a connecting node, if any.
     pub fn active_for(&self, node_id: &str) -> Option<&GrantOut> {
         self.grants

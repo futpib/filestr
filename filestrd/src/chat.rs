@@ -14,7 +14,6 @@ use filestr_chat::{Identity, Relay};
 use libfilestr::ctl::{ChatMessage, HubInfo};
 use libfilestr::grants::PeerIn;
 use libfilestr::p2p::{self, P2pRequest, P2pResponse};
-use libfilestr::ticket::Ticket;
 use nostr::nips::nip44;
 use nostr::{Event, EventBuilder, Filter, JsonUtil, Kind, PublicKey, RelayUrl, Tag, UnsignedEvent};
 use serde::{Deserialize, Serialize};
@@ -154,13 +153,12 @@ fn message_filter() -> Filter {
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum HubRpc {
-    /// member → owner: a joiner asks the owner to add them with their MLS key
-    /// package plus a reciprocal file invite (share-to-join). Used by the
-    /// owner-initiated flow (the joiner redeemed a hub ticket first).
-    Join { group_ref: String, key_package: String, reciprocal: String },
+    /// member → owner: a joiner (who already redeemed a hub ticket, so the
+    /// symmetric grant is in place) asks the owner to add their MLS key package.
+    Join { group_ref: String, key_package: String },
     /// owner → member: the owner admits a join request and pushes the MLS
-    /// welcome plus an owner→member invite so the member can reach the relay.
-    Welcome { group_ref: String, hub_name: String, welcome: String, owner_invite: String },
+    /// welcome. The symmetric redeem already established mutual access.
+    Welcome { group_ref: String, hub_name: String, welcome: String },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -235,28 +233,21 @@ pub async fn join(state: &Arc<State>, ticket_str: String) -> Result<HubInfo> {
         added_at: libfilestr::unix_now(),
     };
 
-    // 1. redeem the owner's invite: now the owner allows us to connect, and we
-    //    record the owner as a file peer (we can browse them too).
+    // 1. redeem the owner's invite. Symmetric: both sides now allow each other
+    //    and record each other as peers (share-to-join falls out of this).
     ctl_server::redeem_ticket(state, ticket.invite.clone(), Some(format!("hub:{}", ticket.name)))
         .await
         .context("redeeming hub invite")?;
 
-    // 2. our MLS key package + a reciprocal file invite (share-to-join).
+    // 2. our MLS key package.
     let relays = hub_relays(state).await;
     let key_package = {
         let mls = state.chat.mls.lock().unwrap();
         mls.key_package_event(&relays)?.as_json()
     };
-    let (reciprocal, _) =
-        ctl_server::mint_invite(state, None, Some(format!("hub:{}", ticket.name)), None, None)
-            .await?;
 
     // 3. ask the owner to admit us.
-    let rpc = HubRpc::Join {
-        group_ref: ticket.group_ref.clone(),
-        key_package,
-        reciprocal: serde_json::to_string(&reciprocal)?,
-    };
+    let rpc = HubRpc::Join { group_ref: ticket.group_ref.clone(), key_package };
     let reply = hub_rpc(state, &owner_peer, &rpc).await?;
     let welcome_json = match reply {
         HubRpcReply::Welcome { welcome } => welcome,
@@ -295,8 +286,8 @@ pub async fn request(
         let mls = state.chat.mls.lock().unwrap();
         mls.key_package_event(&relays)?.as_json()
     };
-    // a reciprocal invite the owner redeems: dial-back + share-to-join
-    let (reciprocal, _) = ctl_server::mint_invite(
+    // a symmetric invite the owner redeems: dial-back + mutual access
+    let (invite, _) = ctl_server::mint_invite(
         state,
         None,
         label.clone().or_else(|| Some("hub-request".to_string())),
@@ -306,7 +297,7 @@ pub async fn request(
     .await?;
     let ticket = filestr_chat::ticket::RequestTicket {
         v: 0,
-        reciprocal,
+        invite,
         key_package,
         hub: hub.clone(),
         label,
@@ -320,8 +311,8 @@ pub async fn request(
     Ok(ticket_str)
 }
 
-/// Owner side: admit a join-request ticket — add the requester to the hub and
-/// push them the welcome (which also hands them an owner→member invite).
+/// Owner side: admit a join-request ticket — redeem the requester's symmetric
+/// invite (mutual access), add them to the hub, and push them the welcome.
 pub async fn admit(
     state: &Arc<State>,
     ticket_str: String,
@@ -330,31 +321,27 @@ pub async fn admit(
     let req = filestr_chat::ticket::RequestTicket::parse(&ticket_str)?;
     let group_ref = resolve_owned_hub(state, req.hub.clone().or(hub_override)).await?;
 
-    // add to MLS (+ redeem the reciprocal for share-to-join)
-    let reciprocal_json = serde_json::to_string(&req.reciprocal)?;
-    let welcome = add_member(state, &group_ref, &req.key_package, Some(&reciprocal_json)).await?;
-
-    // reach the requester (now allows us) to push the welcome + an owner invite
+    // symmetric redeem: mutual access + the requester now allows us (so we can
+    // push the welcome), and records us as their owner peer
     let member_peer = PeerIn {
-        node_id: req.reciprocal.id.clone(),
+        node_id: req.invite.id.clone(),
         label: Some("hub-member".to_string()),
-        relay: req.reciprocal.relay.clone(),
-        ip: req.reciprocal.ip.clone(),
+        relay: req.invite.relay.clone(),
+        ip: req.invite.ip.clone(),
         allow_reshare: false,
         added_at: libfilestr::unix_now(),
     };
+    ctl_server::redeem_ticket(state, req.invite.clone(), Some("hub-member".to_string()))
+        .await
+        .context("redeeming request invite")?;
+
+    let welcome = add_member(state, &group_ref, &req.key_package).await?;
+
     let hub_name = {
         let hubs = state.chat.hubs.lock().await;
         hubs.get(&group_ref).map(|r| r.name.clone()).unwrap_or_default()
     };
-    let (owner_invite, _) =
-        ctl_server::mint_invite(state, None, Some(format!("hub:{hub_name}")), None, None).await?;
-    let rpc = HubRpc::Welcome {
-        group_ref: group_ref.clone(),
-        hub_name,
-        welcome,
-        owner_invite: serde_json::to_string(&owner_invite)?,
-    };
+    let rpc = HubRpc::Welcome { group_ref: group_ref.clone(), hub_name, welcome };
     match hub_rpc(state, &member_peer, &rpc).await? {
         HubRpcReply::Ok => {}
         HubRpcReply::Error { message } => return Err(anyhow!("member failed to join: {message}")),
@@ -694,16 +681,16 @@ pub async fn log(state: &Arc<State>, hub: String) -> Result<Vec<ChatMessage>> {
 
 // === owner-side p2p Hub RPC handler ===
 
-pub async fn handle_hub_rpc(state: &Arc<State>, payload: &str) -> String {
+pub async fn handle_hub_rpc(state: &Arc<State>, caller: &str, payload: &str) -> String {
     let reply = match serde_json::from_str::<HubRpc>(payload) {
-        Ok(HubRpc::Join { group_ref, key_package, reciprocal }) => {
-            match add_member(state, &group_ref, &key_package, Some(&reciprocal)).await {
+        Ok(HubRpc::Join { group_ref, key_package }) => {
+            match add_member(state, &group_ref, &key_package).await {
                 Ok(welcome) => HubRpcReply::Welcome { welcome },
                 Err(e) => HubRpcReply::Error { message: format!("{e:#}") },
             }
         }
-        Ok(HubRpc::Welcome { group_ref, hub_name, welcome, owner_invite }) => {
-            match handle_welcome(state, group_ref, hub_name, welcome, owner_invite).await {
+        Ok(HubRpc::Welcome { group_ref, hub_name, welcome }) => {
+            match handle_welcome(state, caller, group_ref, hub_name, welcome).await {
                 Ok(()) => HubRpcReply::Ok,
                 Err(e) => HubRpcReply::Error { message: format!("{e:#}") },
             }
@@ -713,30 +700,14 @@ pub async fn handle_hub_rpc(state: &Arc<State>, payload: &str) -> String {
     serde_json::to_string(&reply).unwrap_or_else(|_| "{\"type\":\"error\"}".into())
 }
 
-/// Owner side: add a member to one of our hubs from their key package,
-/// optionally redeeming a reciprocal share-to-join invite. Returns the MLS
-/// welcome (JSON).
-async fn add_member(
-    state: &Arc<State>,
-    group_ref: &str,
-    key_package: &str,
-    reciprocal: Option<&str>,
-) -> Result<String> {
+/// Owner side: add a member to one of our hubs from their key package. The
+/// symmetric grant is already in place (the joiner redeemed our/ their invite).
+async fn add_member(state: &Arc<State>, group_ref: &str, key_package: &str) -> Result<String> {
     {
         let hubs = state.chat.hubs.lock().await;
         let rec = hubs.get(group_ref).ok_or_else(|| anyhow!("unknown hub"))?;
         if !rec.owner {
             return Err(anyhow!("not the owner of this hub"));
-        }
-    }
-    if let Some(reciprocal) = reciprocal {
-        // share-to-join: redeem the joiner's reciprocal invite so we can browse them
-        let reciprocal: Ticket =
-            serde_json::from_str(reciprocal).context("parse reciprocal ticket")?;
-        if let Err(e) =
-            ctl_server::redeem_ticket(state, reciprocal, Some("hub-member".to_string())).await
-        {
-            tracing::warn!("share-to-join redeem failed: {e:#}");
         }
     }
     let key_package: Event =
@@ -751,14 +722,14 @@ async fn add_member(
 }
 
 /// Member side: handle an owner pushing us a welcome after admitting our
-/// request — join the MLS group and redeem the owner→member invite so we can
-/// reach the relay.
+/// request — join the MLS group. Mutual access already exists from the
+/// symmetric redeem, and the owner (`caller`) is already one of our peers.
 async fn handle_welcome(
     state: &Arc<State>,
+    caller: &str,
     _group_ref: String,
     hub_name: String,
     welcome: String,
-    owner_invite: String,
 ) -> Result<()> {
     let welcome: UnsignedEvent =
         UnsignedEvent::from_json(welcome.as_bytes()).context("parse welcome")?;
@@ -766,20 +737,12 @@ async fn handle_welcome(
         let mls = state.chat.mls.lock().unwrap();
         mls.join_from_welcome(&welcome)?
     };
-    let owner_ticket: Ticket =
-        serde_json::from_str(&owner_invite).context("parse owner invite")?;
-    let owner_peer = PeerIn {
-        node_id: owner_ticket.id.clone(),
-        label: Some(format!("hub:{hub_name}")),
-        relay: owner_ticket.relay.clone(),
-        ip: owner_ticket.ip.clone(),
-        allow_reshare: false,
-        added_at: libfilestr::unix_now(),
+    // the owner became our peer during the symmetric redeem
+    let owner_peer = {
+        let grants = state.grants.lock().await;
+        grants.grants.peers.iter().find(|p| p.node_id == caller).cloned()
     };
-    ctl_server::redeem_ticket(state, owner_ticket, Some(format!("hub:{hub_name}")))
-        .await
-        .context("redeeming owner invite")?;
-    let record = HubRecord { name: hub_name, owner: false, owner_peer: Some(owner_peer) };
+    let record = HubRecord { name: hub_name, owner: false, owner_peer };
     state.chat.hubs.lock().await.insert(joined.clone(), record);
     state.chat.save_hubs().await;
     state.emit("hub_joined", serde_json::json!({ "group_ref": joined }));

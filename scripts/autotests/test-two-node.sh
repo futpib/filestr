@@ -12,9 +12,17 @@ fctl A rescan | grep -q "rescanned: 2 files" || die "rescan did not find 2 files
 TICKET="$(fctl A invite create --label e2e 2>/dev/null)"
 case "$TICKET" in filestr1*) ;; *) die "bad ticket: $TICKET" ;; esac
 
-start_node B
+start_node B --share
+echo "from B" > "$TESTDIR/B/share/from-b.txt"
+fctl B rescan > /dev/null
 fctl B peer add "$TICKET" > /dev/null || die "peer add failed"
-A_ID="$(node_id A)"
+A_ID="$(node_id A)"; B_ID="$(node_id B)"
+
+# tickets are symmetric: redeeming A's invite also lets A browse B
+fctl A --json browse "$B_ID" > "$TESTDIR/a-browses-b.json" 2>/dev/null \
+    || die "symmetric: A cannot browse B after B redeemed A's invite"
+jq -e '.[] | select(.path | endswith("from-b.txt"))' "$TESTDIR/a-browses-b.json" > /dev/null \
+    || die "symmetric: A does not see B's file"
 
 # browse
 fctl B --json browse "$A_ID" > "$TESTDIR/browse.json" || die "browse failed"

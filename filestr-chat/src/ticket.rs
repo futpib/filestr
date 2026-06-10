@@ -58,9 +58,10 @@ pub const REQ_TICKET_VERSION: u8 = 0;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RequestTicket {
     pub v: u8,
-    /// filestr invite the owner redeems — dials the requester back (to push
-    /// the welcome) and grants the owner file access (share-to-join).
-    pub reciprocal: Ticket,
+    /// The requester's symmetric filestr invite. The owner redeems it, which
+    /// establishes mutual access and lets the owner dial back to push the
+    /// welcome.
+    pub invite: Ticket,
     /// The requester's MLS key-package event (JSON), signed by their nostr key.
     pub key_package: String,
     /// Target hub (MLS group ref) the requester wants; None lets the owner
