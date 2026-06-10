@@ -59,4 +59,20 @@ fctl B --json browse "$A_ID" > "$TESTDIR/b-browses-a.json" 2>/dev/null \
 jq -e '.[] | select(.path | endswith("owner.txt"))' "$TESTDIR/b-browses-a.json" > /dev/null \
     || die "member does not see owner's shared file"
 
+# the hub ticket is single-use: a different node cannot reuse it (the embedded
+# invite token was burned when B joined)
+start_node C
+if fctl C hub join "$TICKET" 2> "$TESTDIR/reuse.err"; then
+    die "hub ticket reuse should have failed"
+fi
+grep -qi "refused\|denied\|already\|redeem\|expired\|invalid" "$TESTDIR/reuse.err" \
+    || die "hub ticket reuse failed for the wrong reason: $(cat "$TESTDIR/reuse.err")"
+# C must not have been added to the group
+MEMBERS_AFTER="$(fctl A --json hub members "$HUB" | jq length)"
+[ "$MEMBERS_AFTER" = 2 ] || die "reuse leaked a member: hub now has $MEMBERS_AFTER"
+
+# a fresh ticket, however, lets C join (owner can add more members)
+TICKET2="$(fctl A hub invite "$HUB" 2>/dev/null | tail -n1)"
+fctl C hub join "$TICKET2" > /dev/null || die "join with a fresh ticket failed"
+
 echo OK
