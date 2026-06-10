@@ -3,6 +3,8 @@
 //! Foreground process, slopd-style: control socket for filestrctl, iroh
 //! endpoint for peers. SIGHUP reloads config and rescans shares.
 
+#[cfg(feature = "chat")]
+mod chat;
 mod ctl_server;
 mod index;
 mod p2p;
@@ -140,6 +142,10 @@ async fn main() -> Result<()> {
     let grants = libfilestr::grants::Grants::load_or_default(&grants_path)
         .context("loading grants.json")?;
 
+    #[cfg(feature = "chat")]
+    let chat_identity = filestr_chat::Identity::load_or_create(&data_dir.join("nostr.key"))
+        .context("loading nostr identity")?;
+
     let (events, _) = tokio::sync::broadcast::channel(256);
     let state = Arc::new(State {
         config_path,
@@ -152,6 +158,8 @@ async fn main() -> Result<()> {
         seen_queries: tokio::sync::Mutex::new(Default::default()),
         recent_sources: tokio::sync::Mutex::new(Default::default()),
         transfers: tokio::sync::Mutex::new(Default::default()),
+        #[cfg(feature = "chat")]
+        chat: crate::chat::ChatState::new(chat_identity),
         events,
         shutdown: tokio_util::sync::CancellationToken::new(),
     });

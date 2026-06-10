@@ -129,6 +129,13 @@ async fn handle_simple(state: &Arc<State>, body: RequestBody) -> ResponseBody {
         RequestBody::Browse { peer } => handle_browse(state, peer).await,
         RequestBody::Transfers => handle_transfers(state).await,
         RequestBody::TransferCancel { id } => handle_transfer_cancel(state, id).await,
+        RequestBody::HubCreate { name } => handle_hub_create(state, name).await,
+        RequestBody::HubInvite { hub } => handle_hub_invite(state, hub).await,
+        RequestBody::HubJoin { ticket } => handle_hub_join(state, ticket).await,
+        RequestBody::HubList => handle_hub_list(state).await,
+        RequestBody::HubMembers { hub } => handle_hub_members(state, hub).await,
+        RequestBody::HubSend { hub, text } => handle_hub_send(state, hub, text).await,
+        RequestBody::HubLog { hub } => handle_hub_log(state, hub).await,
         RequestBody::Search { .. }
         | RequestBody::Get { .. }
         | RequestBody::Subscribe
@@ -186,13 +193,15 @@ async fn dialable_addr(state: &Arc<State>) -> (Vec<String>, Vec<String>) {
     )
 }
 
-async fn handle_invite_create(
+/// Mint an invite, returning the ticket struct (callers encode it directly or
+/// wrap it in a hub ticket).
+pub(crate) async fn mint_invite(
     state: &Arc<State>,
     view: Option<String>,
     label: Option<String>,
     allow_reshare: Option<bool>,
     relay_only: Option<bool>,
-) -> Result<ResponseBody> {
+) -> Result<(Ticket, String)> {
     let config = state.config.read().await.clone();
     let view = view.unwrap_or_else(|| VIEW_FULL.to_string());
     if config.view_roots(&view).is_none() {
@@ -222,6 +231,17 @@ async fn handle_invite_create(
     };
     let token_id = grant.token_id.clone();
     grants.save()?;
+    Ok((ticket, token_id))
+}
+
+async fn handle_invite_create(
+    state: &Arc<State>,
+    view: Option<String>,
+    label: Option<String>,
+    allow_reshare: Option<bool>,
+    relay_only: Option<bool>,
+) -> Result<ResponseBody> {
+    let (ticket, token_id) = mint_invite(state, view, label, allow_reshare, relay_only).await?;
     Ok(ResponseBody::InviteCreated { ticket: ticket.encode(), token_id })
 }
 
@@ -257,12 +277,13 @@ async fn handle_revoke(state: &Arc<State>, needle: String) -> Result<ResponseBod
     Ok(ResponseBody::PeerRevoked { revoked })
 }
 
-async fn handle_peer_add(
+/// Redeem a parsed ticket: dial the grantor, present the token, and record
+/// them as a peer. Returns the new peer info.
+pub(crate) async fn redeem_ticket(
     state: &Arc<State>,
-    ticket: String,
+    ticket: Ticket,
     label: Option<String>,
-) -> Result<ResponseBody> {
-    let ticket = Ticket::parse(&ticket)?;
+) -> Result<PeerInfo> {
     let peer = PeerIn {
         node_id: ticket.id.clone(),
         label: label.or(ticket.label.clone()),
@@ -293,11 +314,20 @@ async fn handle_peer_add(
                 "peer_added",
                 serde_json::json!({ "node_id": info.node_id, "view": view }),
             );
-            Ok(ResponseBody::PeerAdded { peer: info })
+            Ok(info)
         }
         P2pResponse::Error { code, message } => Err(anyhow!("peer refused: {code}: {message}")),
         other => Err(anyhow!("unexpected response: {other:?}")),
     }
+}
+
+async fn handle_peer_add(
+    state: &Arc<State>,
+    ticket: String,
+    label: Option<String>,
+) -> Result<ResponseBody> {
+    let info = redeem_ticket(state, Ticket::parse(&ticket)?, label).await?;
+    Ok(ResponseBody::PeerAdded { peer: info })
 }
 
 async fn handle_peer_list(state: &Arc<State>) -> Result<ResponseBody> {
@@ -498,6 +528,67 @@ async fn handle_transfer_cancel(state: &Arc<State>, id: u64) -> Result<ResponseB
     } else {
         Err(anyhow!("no transfer with id {id}"))
     }
+}
+
+// --- hub handlers (feature-gated; without `chat` they report unsupported) ---
+
+#[cfg(feature = "chat")]
+async fn handle_hub_create(state: &Arc<State>, name: String) -> Result<ResponseBody> {
+    Ok(ResponseBody::HubCreated { hub: crate::chat::create(state, name).await? })
+}
+#[cfg(feature = "chat")]
+async fn handle_hub_invite(state: &Arc<State>, hub: String) -> Result<ResponseBody> {
+    Ok(ResponseBody::HubInvite { ticket: crate::chat::invite(state, hub).await? })
+}
+#[cfg(feature = "chat")]
+async fn handle_hub_join(state: &Arc<State>, ticket: String) -> Result<ResponseBody> {
+    Ok(ResponseBody::HubJoined { hub: crate::chat::join(state, ticket).await? })
+}
+#[cfg(feature = "chat")]
+async fn handle_hub_list(state: &Arc<State>) -> Result<ResponseBody> {
+    Ok(ResponseBody::Hubs { hubs: crate::chat::list(state).await? })
+}
+#[cfg(feature = "chat")]
+async fn handle_hub_members(state: &Arc<State>, hub: String) -> Result<ResponseBody> {
+    Ok(ResponseBody::HubMembers { members: crate::chat::members(state, hub).await? })
+}
+#[cfg(feature = "chat")]
+async fn handle_hub_send(state: &Arc<State>, hub: String, text: String) -> Result<ResponseBody> {
+    crate::chat::send(state, hub, text).await?;
+    Ok(ResponseBody::HubSent)
+}
+#[cfg(feature = "chat")]
+async fn handle_hub_log(state: &Arc<State>, hub: String) -> Result<ResponseBody> {
+    Ok(ResponseBody::HubMessages { messages: crate::chat::log(state, hub).await? })
+}
+
+#[cfg(not(feature = "chat"))]
+async fn handle_hub_create(_: &Arc<State>, _: String) -> Result<ResponseBody> {
+    Err(anyhow!("chat plane not enabled in this build"))
+}
+#[cfg(not(feature = "chat"))]
+async fn handle_hub_invite(_: &Arc<State>, _: String) -> Result<ResponseBody> {
+    Err(anyhow!("chat plane not enabled in this build"))
+}
+#[cfg(not(feature = "chat"))]
+async fn handle_hub_join(_: &Arc<State>, _: String) -> Result<ResponseBody> {
+    Err(anyhow!("chat plane not enabled in this build"))
+}
+#[cfg(not(feature = "chat"))]
+async fn handle_hub_list(_: &Arc<State>) -> Result<ResponseBody> {
+    Err(anyhow!("chat plane not enabled in this build"))
+}
+#[cfg(not(feature = "chat"))]
+async fn handle_hub_members(_: &Arc<State>, _: String) -> Result<ResponseBody> {
+    Err(anyhow!("chat plane not enabled in this build"))
+}
+#[cfg(not(feature = "chat"))]
+async fn handle_hub_send(_: &Arc<State>, _: String, _: String) -> Result<ResponseBody> {
+    Err(anyhow!("chat plane not enabled in this build"))
+}
+#[cfg(not(feature = "chat"))]
+async fn handle_hub_log(_: &Arc<State>, _: String) -> Result<ResponseBody> {
+    Err(anyhow!("chat plane not enabled in this build"))
 }
 
 async fn handle_search(

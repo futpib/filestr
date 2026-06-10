@@ -227,14 +227,40 @@ async fn handle_stream(
                     };
                 }
                 P2pRequest::Nostr => {
-                    write_response(
-                        &mut send,
-                        &P2pResponse::Error {
-                            code: code::UNSUPPORTED.into(),
-                            message: "nostr-over-iroh tunnel not enabled on this node".into(),
-                        },
-                    )
-                    .await?;
+                    #[cfg(feature = "chat")]
+                    {
+                        return crate::chat::serve_nostr(&state, recv, send).await;
+                    }
+                    #[cfg(not(feature = "chat"))]
+                    {
+                        write_response(
+                            &mut send,
+                            &P2pResponse::Error {
+                                code: code::UNSUPPORTED.into(),
+                                message: "nostr-over-iroh tunnel not enabled on this node".into(),
+                            },
+                        )
+                        .await?;
+                    }
+                }
+                P2pRequest::Hub { payload } => {
+                    #[cfg(feature = "chat")]
+                    {
+                        let reply = crate::chat::handle_hub_rpc(&state, &payload).await;
+                        write_response(&mut send, &P2pResponse::HubReply { payload: reply }).await?;
+                    }
+                    #[cfg(not(feature = "chat"))]
+                    {
+                        let _ = payload;
+                        write_response(
+                            &mut send,
+                            &P2pResponse::Error {
+                                code: code::UNSUPPORTED.into(),
+                                message: "hub/chat not enabled on this node".into(),
+                            },
+                        )
+                        .await?;
+                    }
                 }
                 P2pRequest::Hello | P2pRequest::Redeem { .. } => unreachable!(),
             }

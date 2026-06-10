@@ -14,11 +14,19 @@ Not an anonymity network. The goal of attribution-hiding is to avoid doxxing who
 
 ## Status
 
-The iroh-only core (PLAN.md milestones M0–M4) is implemented and covered by
-e2e tests: grants/invites with single-use tickets, view-scoped browse,
-recursive streaming search with attribution-free resharing, and verified
-relayed fetch. The optional nostr chat plane (M5) is designed but not built;
-the wire protocol reserves the `nostr` tunnel stream for it.
+Both planes are implemented and covered by e2e tests.
+
+- **Data plane (iroh-only, M0–M4):** grants/invites with single-use tickets,
+  view-scoped browse, recursive streaming search with attribution-free
+  resharing, and streaming relayed fetch with byte ranges and a background
+  transfer manager.
+- **Chat plane (optional, M5):** real **Marmot/MLS** hubs via
+  [`mdk-core`](https://crates.io/crates/mdk-core) + OpenMLS (the White Noise
+  stack — forward secrecy, post-compromise security). The hub owner hosts an
+  embedded NIP-01 relay served over the iroh `nostr` stream, so hubs work with
+  **zero external relays**. Joining a hub auto-grants the owner file access
+  (share-to-join). Built behind the `chat` cargo feature (default on);
+  `--no-default-features` gives a pure iroh-only build.
 
 See [DESIGN.md](DESIGN.md) for the protocol and [PLAN.md](PLAN.md) for the
 roadmap.
@@ -49,6 +57,14 @@ filestrctl get <hash> -b -o big.iso       # background; returns a transfer id
 filestrctl transfers                      # watch active/queued/done downloads
 
 filestrctl status                         # also: peer ls, invite ls, listen
+
+# chat: nostr/MLS hubs (needs a chat-enabled daemon, the default build)
+filestrctl hub create general             # owner: create a hub you own
+filestrctl hub invite general             # owner: prints a filestrhub1… ticket
+filestrctl hub join filestrhub1…          # member: join (auto-shares with owner)
+filestrctl hub send general "hi everyone" # E2EE group message
+filestrctl hub log general                # decrypted chat log
+filestrctl hub members general
 ```
 
 Daemon and CLI follow the slopd/slopctl shape: unix socket at
@@ -66,7 +82,9 @@ lifecycle, three-node reshare chain asserting zero origin attribution in
 results, relayed verified fetch, search-cycle termination, the
 `allow_reshare=false` contract, and streaming/ranges/background — including an
 assertion that a relay does **not** cache the bytes it forwards, a clipped
-byte-range fetch, and several concurrent background downloads.
+byte-range fetch, and several concurrent background downloads. The chat suite
+runs a real Marmot/MLS hub over the iroh nostr tunnel (no external relay):
+bidirectional E2EE messages and the share-to-join file grant.
 
 ## Lineage
 

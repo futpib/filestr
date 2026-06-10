@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["libfilestr", "libfilestrctl", "filestrd", "filestrctl"]
+members = ["libfilestr", "libfilestrctl", "filestrd", "filestrctl", "filestr-chat"]
 
 [workspace.package]
 version = "0.1.0"

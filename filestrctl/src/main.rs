@@ -72,10 +72,37 @@ enum Command {
     Transfers,
     /// Cancel a transfer by id
     Cancel { id: u64 },
+    /// Hubs: nostr/MLS group chat (requires a chat-enabled daemon)
+    Hub {
+        #[command(subcommand)]
+        command: HubCommand,
+    },
     /// Stream daemon events
     Listen,
     /// Stop the daemon
     Shutdown,
+}
+
+#[derive(Debug, Subcommand)]
+enum HubCommand {
+    /// Create a hub you own
+    Create { name: String },
+    /// Mint a join ticket for a hub you own
+    Invite { hub: String },
+    /// Join a hub from a filestrhub1… ticket
+    Join { ticket: String },
+    /// List hubs you own or have joined
+    Ls,
+    /// List a hub's members
+    Members { hub: String },
+    /// Send a chat message
+    Send {
+        hub: String,
+        #[arg(required = true)]
+        message: Vec<String>,
+    },
+    /// Show a hub's chat log
+    Log { hub: String },
 }
 
 #[derive(Debug, Subcommand)]
@@ -428,6 +455,7 @@ async fn run() -> Result<()> {
                 println!("cancelled transfer {id}");
             }
         }
+        Command::Hub { command } => run_hub(&mut client, cli.json, command).await?,
         Command::Listen => {
             let id = client.send(RequestBody::Subscribe).await?;
             loop {
@@ -445,6 +473,86 @@ async fn run() -> Result<()> {
             };
             if !cli.json {
                 println!("daemon shutting down");
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn run_hub(client: &mut Client, json: bool, command: HubCommand) -> Result<()> {
+    match command {
+        HubCommand::Create { name } => {
+            let response = client.roundtrip(RequestBody::HubCreate { name }).await?;
+            let ResponseBody::HubCreated { hub } = response else { bail!("unexpected response") };
+            if json {
+                print_json(&hub);
+            } else {
+                println!("created hub {} ({})", hub.name, hub.group_ref);
+            }
+        }
+        HubCommand::Invite { hub } => {
+            let response = client.roundtrip(RequestBody::HubInvite { hub }).await?;
+            let ResponseBody::HubInvite { ticket } = response else { bail!("unexpected response") };
+            if json {
+                print_json(&serde_json::json!({ "ticket": ticket }));
+            } else {
+                println!("{ticket}");
+            }
+        }
+        HubCommand::Join { ticket } => {
+            let response = client.roundtrip(RequestBody::HubJoin { ticket }).await?;
+            let ResponseBody::HubJoined { hub } = response else { bail!("unexpected response") };
+            if json {
+                print_json(&hub);
+            } else {
+                println!("joined hub {} ({})", hub.name, hub.group_ref);
+            }
+        }
+        HubCommand::Ls => {
+            let response = client.roundtrip(RequestBody::HubList).await?;
+            let ResponseBody::Hubs { hubs } = response else { bail!("unexpected response") };
+            if json {
+                print_json(&hubs);
+            } else {
+                for h in hubs {
+                    let role = if h.owner { "owner" } else { "member" };
+                    println!("{:<6} {:<3} members  {:<20} {}", role, h.members, h.name, h.group_ref);
+                }
+            }
+        }
+        HubCommand::Members { hub } => {
+            let response = client.roundtrip(RequestBody::HubMembers { hub }).await?;
+            let ResponseBody::HubMembers { members } = response else {
+                bail!("unexpected response")
+            };
+            if json {
+                print_json(&members);
+            } else {
+                for m in members {
+                    println!("{m}");
+                }
+            }
+        }
+        HubCommand::Send { hub, message } => {
+            let response =
+                client.roundtrip(RequestBody::HubSend { hub, text: message.join(" ") }).await?;
+            let ResponseBody::HubSent = response else { bail!("unexpected response") };
+            if !json {
+                println!("sent");
+            }
+        }
+        HubCommand::Log { hub } => {
+            let response = client.roundtrip(RequestBody::HubLog { hub }).await?;
+            let ResponseBody::HubMessages { messages } = response else {
+                bail!("unexpected response")
+            };
+            if json {
+                print_json(&messages);
+            } else {
+                for m in messages {
+                    let who = &m.author[..m.author.len().min(12)];
+                    println!("{who}  {}", m.content);
+                }
             }
         }
     }

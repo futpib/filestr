@@ -85,6 +85,33 @@ pub enum RequestBody {
     TransferCancel {
         id: u64,
     },
+    /// Create a hub (MLS group) we own.
+    HubCreate {
+        name: String,
+    },
+    /// Mint a hub join ticket (also grants the invitee file-relay access).
+    HubInvite {
+        hub: String,
+    },
+    /// Join a hub from a `filestrhub1…` ticket.
+    HubJoin {
+        ticket: String,
+    },
+    /// List hubs we own or have joined.
+    HubList,
+    /// List a hub's members (nostr pubkeys).
+    HubMembers {
+        hub: String,
+    },
+    /// Send a chat message to a hub.
+    HubSend {
+        hub: String,
+        text: String,
+    },
+    /// Sync and return a hub's chat log.
+    HubLog {
+        hub: String,
+    },
     Subscribe,
     Shutdown,
 }
@@ -109,6 +136,13 @@ pub enum ResponseBody {
     TransferStarted { id: u64 },
     Transfers { transfers: Vec<TransferInfo> },
     TransferCancelled { id: u64 },
+    HubCreated { hub: HubInfo },
+    HubInvite { ticket: String },
+    HubJoined { hub: HubInfo },
+    Hubs { hubs: Vec<HubInfo> },
+    HubMembers { members: Vec<String> },
+    HubSent,
+    HubMessages { messages: Vec<ChatMessage> },
     Subscribed,
     Event { event: Event },
     ShuttingDown,
@@ -195,6 +229,24 @@ pub struct SearchHit {
 pub struct Event {
     pub event_type: String,
     pub payload: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HubInfo {
+    /// MLS group id (hex) — the stable hub handle used in commands.
+    pub group_ref: String,
+    pub name: String,
+    /// True if this node owns the hub (hosts its relay).
+    pub owner: bool,
+    pub members: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatMessage {
+    /// Author nostr pubkey (hex).
+    pub author: String,
+    pub content: String,
+    pub created_at: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

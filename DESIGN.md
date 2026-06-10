@@ -70,21 +70,27 @@ Grant {
 ### 3.3 Lifecycle
 
 - `issued → active` on token redemption; `issued → expired` on timeout.
-- `active → revoked`: manual, or automatic — leaving a hub revokes the grant to its owner; observing one's own MLS removal (kick) does the same.
+- `active → revoked`: manual (`peer revoke`). Automatic revoke on hub leave/kick is planned (the MLS removal primitive is wired; the command is not yet — §4.x).
 - Enforcement: accept loop checks `remote_node_id()` against active grants; strangers cost one rejected TLS handshake.
 
-## 4. Hubs (optional chat plane)
+## 4. Hubs (optional chat plane — implemented)
 
-A hub is an MLS group (Marmot/Whitenoise) owned by one node. Chat semantics are entirely Whitenoise's: E2EE, async via nostr relays, admins can add/remove members.
+A hub is a real **Marmot/MLS group** (via `mdk-core` + OpenMLS, the White Noise stack) owned by one node. Messages are MLS application messages (forward secrecy, post-compromise security) carried as nostr kind:445 events; membership uses MLS key packages (kind:30443) and welcomes (kind:444). The hub **owner hosts an embedded NIP-01 relay** ([§8.2](#82-nostr-over-iroh)) reachable by members over the iroh `nostr` stream — so a hub needs **no external nostr relay**.
 
-### 4.1 Join flow
+### 4.1 Join flow (implemented)
 
-1. Prospective member asks the owner (any channel; typically nostr DM).
-2. Owner adds them to the MLS group → they can chat with everyone.
-3. Joiner's client automatically issues a grant + invite **to the owner only** (the price of admission) and DMs the ticket.
-4. Owner's client may verify the share is nonempty / spot-check a file; stonewalling ⇒ kick.
+Driven entirely by the daemons; the user just pastes a `filestrhub1…` ticket.
 
-Membership grants file access to **no one else**. Member↔member sharing is always an explicit pairwise grant (typically negotiated in chat).
+1. Owner mints a hub ticket = a filestr invite (owner→member grant, so the joiner can reach the owner's relay) + the hub name + the MLS group ref.
+2. Joiner redeems the invite (connects to the owner) and, as the **price of admission**, mints a reciprocal filestr invite back to the owner — the share-to-join grant — alongside its MLS key package.
+3. Joiner sends both to the owner over the `hub` control RPC. The owner redeems the reciprocal invite (gaining file access to the joiner), runs MLS `add_members`, and returns the MLS welcome.
+4. Joiner processes the welcome → joined. Messages flow through the owner's relay; each member advances its own MLS state by processing the kind:445 events it pulls.
+
+Membership grants file access to the **owner only** (the reciprocal grant). Member↔member file sharing remains an explicit pairwise grant.
+
+### 4.x v1 scope
+
+Implemented: create, invite, join (with share-to-join), members, send, log, all E2EE over the iroh tunnel. Deferred: member removal/kick rekeying (an admin can revoke the file grant today, but MLS removal that locks a member out of future messages — `remove_members` is wired but not yet exposed via a kick command), member↔member relay federation (members reach the owner's relay only), and persistent MLS storage (see §12).
 
 ### 4.2 Hub-level search fallback
 
@@ -175,9 +181,11 @@ Applies to the p2p protocol, the ticket format, and the local control socket ali
 - **Additive evolution only**: fields and message types are never repurposed or re-typed; deprecation = stop sending, keep accepting.
 - Tickets carry an explicit `v` field; unknown ticket versions fail with a clear "upgrade filestr" error.
 
-### 8.2 nostr over iroh
+### 8.2 nostr over iroh (implemented)
 
-A reserved `nostr` stream type tunnels the nostr relay protocol (NIP-01 client↔relay JSON messages) over a granted iroh connection: a filestr node can expose an embedded nostr relay to its grantees. Chat (Whitenoise/MLS hubs, DM invite transport) then needs **zero public nostr relays** — events sync peer-to-peer over the same grant graph as files, and public relays remain merely another interchangeable transport. This keeps the chat plane optional *and* self-hostable: an iroh-only network can later turn on hubs without any new infrastructure.
+The `nostr` stream type tunnels the nostr relay protocol (NIP-01 client↔relay JSON messages) over a granted iroh connection: a filestr node exposes an embedded in-memory NIP-01 relay to its grantees. After the `nostr` header line, the rest of the stream is a NIP-01 session (REQ/EVENT/EOSE/CLOSE). Chat then needs **zero public nostr relays** — hub events sync over the same grant graph as files. The chat plane is thus optional *and* self-hostable: an iroh-only network turns on hubs with no new infrastructure. (External nostr relays remain a possible interchangeable transport but are not required.)
+
+The `hub` request is a small control RPC (opaque to the wire layer; the `chat` feature defines the payload) used for the join handshake — carrying the joiner's MLS key package + reciprocal invite and returning the MLS welcome.
 
 ## 9. Settings
 
@@ -211,8 +219,8 @@ Setting `reshare.* = false` everywhere degrades gracefully to a pure pairwise F2
 |---|---|---|
 | `iroh` | QUIC p2p endpoint | 1.0.0-rc — pin; API may still shift before 1.0 |
 | `iroh-blobs` | BLAKE3/bao verified streaming + provider/get over abstract streams | used as a library, carried inline on `filestr/0`; filestr gates access itself |
-| MDK / `whitenoise-rs` (Marmot) | MLS groups + DMs over nostr | **optional feature**; audited 2026; spec still evolving — pin |
-| `rust-nostr` | nostr primitives, embedded relay for §8.2 | **optional feature** |
+| `mdk-core` + `mdk-memory-storage` (Marmot, on OpenMLS) | MLS hubs — groups, key packages, welcomes, messages | **`chat` feature**; audited 2026; spec still evolving — pinned at 0.8 |
+| `nostr` (rust-nostr) | nostr keys/events/filters, NIP-01 relay messages for §8.2 | **`chat` feature**, pinned at 0.44 |
 | `serde_json` | wire encoding (p2p + control socket), grant persistence (atomic writes) | |
 
 ## 12. v1 implementation notes (deliberate simplifications)
@@ -234,6 +242,10 @@ Setting `reshare.* = false` everywhere degrades gracefully to a pure pairwise F2
   still clipped exactly.
 - Relays do **not** cache pass-through content (streaming, §7.3); optional
   swarm-thickening cache is future work.
+- **Chat (§4):** MLS state uses `mdk-memory-storage`, so hubs are lost on
+  daemon restart; `mdk-sqlite-storage` is a drop-in for persistence. The hub
+  owner is the sole relay host (no member↔member federation yet), and MLS
+  member removal/kick is wired in the library but not yet exposed as a command.
 
 ## 13. Open questions
 

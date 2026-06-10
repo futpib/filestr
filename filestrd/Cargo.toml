@@ -4,15 +4,22 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+default = ["chat"]
+# Optional nostr chat plane (Marmot/MLS hubs). Disable for an iroh-only build.
+chat = ["dep:filestr-chat", "dep:nostr"]
+
 [dependencies]
 anyhow = "1.0.102"
 clap = { version = "4.6.1", features = ["derive"] }
 data-encoding = "2.11.0"
+filestr-chat = { path = "../filestr-chat", optional = true }
 futures-lite = "2.6.1"
 iroh = "1.0.0-rc.1"
 iroh-blobs = "0.102.0"
 libfilestr = { path = "../libfilestr" }
 n0-error = "1.0.0-rc.0"
+nostr = { version = "0.44.3", optional = true }
 rand = "0.10.1"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"

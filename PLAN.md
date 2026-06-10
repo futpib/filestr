@@ -11,14 +11,22 @@ filestr/
   libfilestrctl   # client library: socket transport, request/response, subscriptions
   filestrd        # daemon binary
   filestrctl      # CLI binary (thin wrapper over libfilestrctl)
-  filestr-chat    # FUTURE, optional: nostr/Whitenoise (MDK) — hubs, DMs, nostr-over-iroh
+  filestr-chat    # optional (`chat` feature): Marmot/MLS via mdk-core, embedded
+                  # NIP-01 relay, hub tickets — carried over the iroh nostr stream
 ```
 
 ## Milestones
 
 Each milestone ends with a runnable demo and a test gate (bash e2e harness driving N local nodes on localhost, same spirit as kmux's `scripts/autotests/`).
 
-**Progress: M0–M4 implemented and passing their gates** (`scripts/autotests/`), now with **streaming transfers**: relays splice bytes through without caching (asserted in tests), `get` supports byte ranges (`--range`), and a background transfer manager runs many downloads concurrently (`get -b`, `transfers`, `cancel`). Remaining simplifications: multi-source is sequential not parallel, no per-grant rate limits (see DESIGN.md §12). M5–M6 not started.
+**Progress: M0–M5 implemented and passing their gates** (`scripts/autotests/`).
+M0–M4 (data plane) include **streaming transfers** — relays splice bytes
+through without caching (asserted in tests), byte ranges (`--range`), and a
+background transfer manager (`get -b`, `transfers`, `cancel`). **M5 (chat
+plane)** ships real Marmot/MLS hubs via `mdk-core` over the iroh nostr tunnel
+(no external relay), with share-to-join. Remaining simplifications: sequential
+multi-source, no per-grant rate limits, in-memory MLS storage, no kick command
+(see DESIGN.md §4.x, §12). M6 (hardening/UI) not started.
 
 ### M0 — spike: gated pipe (≈ a day)
 
@@ -53,15 +61,14 @@ Each milestone ends with a runnable demo and a test gate (bash e2e harness drivi
 - `reshare.serve` / `reshare.allow` flags wired through.
 - **Gate** (3–4 node line A–B–C[–D]): C's search finds A's file with no A-identifying bytes on the C wire; relayed fetch streams + verifies; the relay's store stays empty (no cache); a clipped byte range returns exact bytes; concurrent background gets complete; cycle graph terminates; `reshare=false` prunes.
 
-### M5 — optional chat plane: hubs (feature-gated `filestr-chat`)
+### M5 — optional chat plane: hubs (feature `chat`) — DONE
 
-- MDK/whitenoise-rs integration: create hub (MLS group), join, member list, chat send/recv.
-- Invite tickets over E2EE DM; **join ⇒ auto-grant to owner**; leave/kick ⇒ auto-revoke (watch own MLS removal).
-- **nostr-over-iroh** (DESIGN §8.2): embedded relay served to grantees over the reserved `nostr` stream type, so hubs work with zero public relays.
-- Hub-level "looking for X" structured message + opt-in auto-offer.
-- CLI: `hub create|join|members|chat`, `invite send <nostr-pubkey>`.
-- Everything in M0–M4 must keep working with this feature compiled out or disabled.
-- **Gate**: full join flow on local relay (e.g. `nak serve`) *and* over the iroh tunnel with no relay configured; kick revokes within one poll interval.
+- `mdk-core` (Marmot/MLS on OpenMLS) integration: create hub (MLS group), join via welcome, member list, chat send/recv — real forward secrecy + PCS. (`filestr-chat` crate, MLS round-trip unit-tested.)
+- Hub ticket (`filestrhub1…`) = owner→member invite + group ref; **join ⇒ reciprocal share-to-join grant to owner** (auto). MLS member removal wired (`remove_members`); kick command + auto-revoke deferred.
+- **nostr-over-iroh** (DESIGN §8.2): embedded NIP-01 relay served to grantees over the `nostr` stream, so hubs work with zero external relays; a small `hub` control RPC carries the join handshake.
+- CLI: `hub create|invite|join|ls|members|send|log`.
+- M0–M4 keep working with `--no-default-features` (iroh-only build verified).
+- **Gate** (`test-hub-chat.sh`): owner creates hub, member joins over the iroh tunnel with no external relay, E2EE messages flow both ways, both see 2 members, and the owner can browse the member's files (share-to-join).
 
 ### M6 — hardening & daily-driver polish
 

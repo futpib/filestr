@@ -28,6 +28,8 @@ pub struct State {
     pub seen_queries: tokio::sync::Mutex<SeenQueries>,
     pub recent_sources: tokio::sync::Mutex<RecentSources>,
     pub transfers: tokio::sync::Mutex<crate::transfers::Transfers>,
+    #[cfg(feature = "chat")]
+    pub chat: crate::chat::ChatState,
     pub events: tokio::sync::broadcast::Sender<Event>,
     pub shutdown: tokio_util::sync::CancellationToken,
 }

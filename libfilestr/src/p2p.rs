@@ -55,9 +55,13 @@ pub enum P2pRequest {
         #[serde(default)]
         handle: Option<String>,
     },
-    /// Reserved: nostr-over-iroh tunnel (DESIGN.md §8.2). Answered with
-    /// `unsupported` until the chat plane lands.
+    /// nostr-over-iroh tunnel (DESIGN.md §8.2): the rest of the stream is a
+    /// NIP-01 relay session. Answered with `unsupported` when the chat feature
+    /// is disabled.
     Nostr,
+    /// Hub control RPC (opaque to this layer; the chat feature defines the
+    /// payload). One JSON request line in, one `HubReply` out.
+    Hub { payload: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -87,6 +91,8 @@ pub enum P2pResponse {
         handle: String,
     },
     SearchDone,
+    /// Reply to a `Hub` request (opaque; chat feature defines the payload).
+    HubReply { payload: String },
     Error { code: String, message: String },
 }
 
@@ -123,7 +129,7 @@ pub fn decode_request(line: &str) -> DecodedRequest {
 }
 
 fn known_request_type(t: &str) -> bool {
-    matches!(t, "hello" | "redeem" | "list" | "search" | "get" | "nostr")
+    matches!(t, "hello" | "redeem" | "list" | "search" | "get" | "nostr" | "hub")
 }
 
 pub fn encode<T: Serialize>(msg: &T) -> String {
