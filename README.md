@@ -78,6 +78,11 @@ Daemon and CLI follow the slopd/slopctl shape: unix socket at
 `$XDG_RUNTIME_DIR/filestrd/filestrd.sock`, JSON-lines protocol, TOML config,
 state under `~/.local/share/filestr/`.
 
+The chat plane is optional at runtime too: `[chat] enabled = false` runs a pure
+file-peering node with no nostr (flip it on and restart to join hubs later).
+Plain `filestr1…` invites work either way; hub tickets need chat on for the
+MLS join.
+
 Relays are configurable on both planes. iroh connectivity: `relay = "default"`
 / `"disabled"` / `relay_urls = ["https://my.relay./"]`. nostr chat: `[chat]`
 with `embedded_relay`, `relay_listen = "127.0.0.1:7777"` (expose this node as a

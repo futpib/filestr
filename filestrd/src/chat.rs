@@ -119,7 +119,8 @@ pub async fn spawn_relay_listener(state: Arc<State>) {
         }
     };
     tracing::info!("nostr relay (websocket) listening on {addr}");
-    let relay = state.chat.relay.clone();
+    let Ok(chat) = state.chat() else { return };
+    let relay = chat.relay.clone();
     let shutdown = state.shutdown.clone();
     tokio::spawn(async move {
         loop {
@@ -171,7 +172,7 @@ fn hub_info(record: &HubRecord, group_ref: &str, members: usize) -> HubInfo {
 }
 
 async fn find_hub(state: &Arc<State>, needle: &str) -> Result<String> {
-    let hubs = state.chat.hubs.lock().await;
+    let hubs = state.chat()?.hubs.lock().await;
     let matches: Vec<&String> = hubs
         .iter()
         .filter(|(gref, rec)| gref.starts_with(needle) || rec.name == needle)
@@ -189,13 +190,13 @@ async fn find_hub(state: &Arc<State>, needle: &str) -> Result<String> {
 pub async fn create(state: &Arc<State>, name: String) -> Result<HubInfo> {
     let relays = hub_relays(state).await;
     let group_ref = {
-        let mls = state.chat.mls.lock().unwrap();
+        let mls = state.chat()?.mls.lock().unwrap();
         mls.create_group(&name, &relays)?
     };
     let record = HubRecord { name, owner: true, owner_peer: None };
     let info = hub_info(&record, &group_ref, 1);
-    state.chat.hubs.lock().await.insert(group_ref.clone(), record);
-    state.chat.save_hubs().await;
+    state.chat()?.hubs.lock().await.insert(group_ref.clone(), record);
+    state.chat()?.save_hubs().await;
     state.emit("hub_created", serde_json::json!({ "group_ref": group_ref }));
     Ok(info)
 }
@@ -203,7 +204,7 @@ pub async fn create(state: &Arc<State>, name: String) -> Result<HubInfo> {
 pub async fn invite(state: &Arc<State>, hub: String) -> Result<String> {
     let group_ref = find_hub(state, &hub).await?;
     let name = {
-        let hubs = state.chat.hubs.lock().await;
+        let hubs = state.chat()?.hubs.lock().await;
         let rec = hubs.get(&group_ref).ok_or_else(|| anyhow!("hub gone"))?;
         if !rec.owner {
             return Err(anyhow!("only the hub owner can invite"));
@@ -237,7 +238,7 @@ pub async fn join(state: &Arc<State>, ticket_str: String) -> Result<HubInfo> {
     // 2. our MLS key package.
     let relays = hub_relays(state).await;
     let key_package = {
-        let mls = state.chat.mls.lock().unwrap();
+        let mls = state.chat()?.mls.lock().unwrap();
         mls.key_package_event(&relays)?.as_json()
     };
 
@@ -254,15 +255,15 @@ pub async fn join(state: &Arc<State>, ticket_str: String) -> Result<HubInfo> {
     let welcome: UnsignedEvent =
         UnsignedEvent::from_json(welcome_json.as_bytes()).context("parse welcome")?;
     let group_ref = {
-        let mls = state.chat.mls.lock().unwrap();
+        let mls = state.chat()?.mls.lock().unwrap();
         mls.join_from_welcome(&welcome)?
     };
 
     let record = HubRecord { name: ticket.name, owner: false, owner_peer: Some(owner_peer) };
-    let members = members_count(state, &group_ref);
+    let members = members_count(state.chat()?, &group_ref);
     let info = hub_info(&record, &group_ref, members);
-    state.chat.hubs.lock().await.insert(group_ref.clone(), record);
-    state.chat.save_hubs().await;
+    state.chat()?.hubs.lock().await.insert(group_ref.clone(), record);
+    state.chat()?.save_hubs().await;
     state.emit("hub_joined", serde_json::json!({ "group_ref": group_ref }));
     Ok(info)
 }
@@ -284,7 +285,7 @@ pub async fn request(
 
     let relays = hub_relays(state).await;
     let key_package = {
-        let mls = state.chat.mls.lock().unwrap();
+        let mls = state.chat()?.mls.lock().unwrap();
         mls.key_package_event(&relays)?.as_json()
     };
     // a symmetric invite the owner redeems: dial-back + mutual access
@@ -340,7 +341,7 @@ pub async fn admit(
     let welcome = add_member(state, &group_ref, &req.key_package).await?;
 
     let hub_name = {
-        let hubs = state.chat.hubs.lock().await;
+        let hubs = state.chat()?.hubs.lock().await;
         hubs.get(&group_ref).map(|r| r.name.clone()).unwrap_or_default()
     };
     let rpc = HubRpc::Welcome { group_ref: group_ref.clone(), hub_name, welcome };
@@ -350,16 +351,16 @@ pub async fn admit(
         other => return Err(anyhow!("unexpected admit reply: {}", serde_json::to_string(&other)?)),
     }
 
-    let members = members_count(state, &group_ref);
-    let hubs = state.chat.hubs.lock().await;
+    let members = members_count(state.chat()?, &group_ref);
+    let hubs = state.chat()?.hubs.lock().await;
     hubs.get(&group_ref)
         .map(|r| hub_info(r, &group_ref, members))
         .ok_or_else(|| anyhow!("hub gone"))
 }
 
 /// Our nostr identity keypair.
-fn our_keys(state: &Arc<State>) -> nostr::Keys {
-    state.chat.mls.lock().unwrap().keys.clone()
+fn our_keys(chat: &ChatState) -> nostr::Keys {
+    chat.mls.lock().unwrap().keys.clone()
 }
 
 /// Produce a hub's shareable address (a small pointer, not a published note):
@@ -367,14 +368,14 @@ fn our_keys(state: &Arc<State>) -> nostr::Keys {
 pub async fn address(state: &Arc<State>, hub: String) -> Result<String> {
     let group_ref = resolve_owned_hub(state, Some(hub)).await?;
     let name = {
-        let hubs = state.chat.hubs.lock().await;
+        let hubs = state.chat()?.hubs.lock().await;
         hubs.get(&group_ref).map(|r| r.name.clone()).unwrap_or_default()
     };
     let addr = filestr_chat::ticket::HubAddress {
         v: 0,
         name,
         group_ref,
-        owner: our_keys(state).public_key().to_hex(),
+        owner: our_keys(state.chat()?).public_key().to_hex(),
         relays: external_relays(state).await,
     };
     Ok(addr.encode())
@@ -388,7 +389,7 @@ async fn send_request_dm(
     ticket: &str,
     relays: Vec<String>,
 ) -> Result<()> {
-    let keys = our_keys(state);
+    let keys = our_keys(state.chat()?);
     let rumor = EventBuilder::new(Kind::PrivateDirectMessage, ticket).build(keys.public_key());
     let gift = EventBuilder::gift_wrap(&keys, &owner, rumor, [])
         .await
@@ -408,20 +409,22 @@ async fn send_request_dm(
 
 /// List join requests received over nostr awaiting manual admit.
 pub async fn pending(state: &Arc<State>) -> Vec<(String, String)> {
-    state.chat.pending.lock().await.clone()
+    let Ok(chat) = state.chat() else { return Vec::new() };
+    chat.pending.lock().await.clone()
 }
 
 /// Owner-side: subscribe (in-process and on external relays) for encrypted
 /// join-request DMs, decrypt them, and auto-admit or queue per policy.
 pub async fn spawn_dm_listener(state: Arc<State>) {
-    let our_pub = our_keys(&state).public_key();
+    let Ok(chat) = state.chat() else { return };
+    let our_pub = our_keys(chat).public_key();
     let seen: Arc<tokio::sync::Mutex<std::collections::HashSet<String>>> = Arc::default();
 
     // in-process relay (catches DMs arriving via our own ws listener / tunnel)
     {
         let state = state.clone();
         let seen = seen.clone();
-        let mut rx = state.chat.relay.subscribe();
+        let mut rx = chat.relay.subscribe();
         tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -487,7 +490,8 @@ async fn handle_dm(
         }
     }
     // unwrap the NIP-17 gift wrap → the inner rumor carries the request ticket
-    let keys = our_keys(state);
+    let Ok(chat) = state.chat() else { return };
+    let keys = our_keys(chat);
     let unwrapped = match nostr::nips::nip59::UnwrappedGift::from_gift_wrap(&keys, &ev).await {
         Ok(u) => u,
         Err(e) => {
@@ -510,7 +514,7 @@ async fn handle_dm(
             }
         });
     } else {
-        state.chat.pending.lock().await.push((from.clone(), ticket));
+        chat.pending.lock().await.push((from.clone(), ticket));
         state.emit("join_request_pending", serde_json::json!({ "from": from }));
     }
 }
@@ -518,7 +522,7 @@ async fn handle_dm(
 /// Resolve which owned hub to admit into: the hint (group-ref prefix or name),
 /// or the sole owned hub if there's exactly one.
 async fn resolve_owned_hub(state: &Arc<State>, hint: Option<String>) -> Result<String> {
-    let hubs = state.chat.hubs.lock().await;
+    let hubs = state.chat()?.hubs.lock().await;
     let owned: Vec<(&String, &HubRecord)> = hubs.iter().filter(|(_, r)| r.owner).collect();
     match hint {
         Some(h) => owned
@@ -535,10 +539,11 @@ async fn resolve_owned_hub(state: &Arc<State>, hint: Option<String>) -> Result<S
 }
 
 pub async fn list(state: &Arc<State>) -> Result<Vec<HubInfo>> {
-    let hubs = state.chat.hubs.lock().await;
+    let chat = state.chat()?;
+    let hubs = chat.hubs.lock().await;
     let mut out: Vec<HubInfo> = hubs
         .iter()
-        .map(|(gref, rec)| hub_info(rec, gref, members_count(state, gref)))
+        .map(|(gref, rec)| hub_info(rec, gref, members_count(chat, gref)))
         .collect();
     out.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(out)
@@ -546,23 +551,23 @@ pub async fn list(state: &Arc<State>) -> Result<Vec<HubInfo>> {
 
 pub async fn members(state: &Arc<State>, hub: String) -> Result<Vec<String>> {
     let group_ref = find_hub(state, &hub).await?;
-    let mls = state.chat.mls.lock().unwrap();
+    let mls = state.chat()?.mls.lock().unwrap();
     mls.members(&group_ref)
 }
 
-fn members_count(state: &Arc<State>, group_ref: &str) -> usize {
-    state.chat.mls.lock().unwrap().members(group_ref).map(|m| m.len()).unwrap_or(0)
+fn members_count(chat: &ChatState, group_ref: &str) -> usize {
+    chat.mls.lock().unwrap().members(group_ref).map(|m| m.len()).unwrap_or(0)
 }
 
 pub async fn send(state: &Arc<State>, hub: String, text: String) -> Result<()> {
     let group_ref = find_hub(state, &hub).await?;
     let (event, owner_peer) = {
         let owner_peer = {
-            let hubs = state.chat.hubs.lock().await;
+            let hubs = state.chat()?.hubs.lock().await;
             hubs.get(&group_ref).and_then(|r| r.owner_peer.clone())
         };
         let event = {
-            let mls = state.chat.mls.lock().unwrap();
+            let mls = state.chat()?.mls.lock().unwrap();
             mls.create_message(&group_ref, &text)?
         };
         (event, owner_peer)
@@ -570,7 +575,7 @@ pub async fn send(state: &Arc<State>, hub: String, text: String) -> Result<()> {
     match &owner_peer {
         None => {
             // we host the relay
-            state.chat.relay.publish(event.clone());
+            state.chat()?.relay.publish(event.clone());
         }
         Some(owner) => publish_to_owner(state, owner, event.clone()).await?,
     }
@@ -587,7 +592,7 @@ pub async fn send(state: &Arc<State>, hub: String, text: String) -> Result<()> {
 pub async fn log(state: &Arc<State>, hub: String) -> Result<Vec<ChatMessage>> {
     let group_ref = find_hub(state, &hub).await?;
     let owner_peer = {
-        let hubs = state.chat.hubs.lock().await;
+        let hubs = state.chat()?.hubs.lock().await;
         hubs.get(&group_ref).and_then(|r| r.owner_peer.clone())
     };
 
@@ -595,7 +600,7 @@ pub async fn log(state: &Arc<State>, hub: String) -> Result<Vec<ChatMessage>> {
     // failure here (e.g. the owner is offline) must not stop us returning the
     // history already stored locally
     let mut events = match &owner_peer {
-        None => state.chat.relay.query(&[message_filter()]),
+        None => state.chat()?.relay.query(&[message_filter()]),
         Some(owner) => fetch_from_owner(state, owner).await.unwrap_or_else(|e| {
             tracing::debug!("fetch from owner failed: {e:#}");
             Vec::new()
@@ -610,13 +615,13 @@ pub async fn log(state: &Arc<State>, hub: String) -> Result<Vec<ChatMessage>> {
     }
     // advance MLS state with anything new (own/duplicate events are ignored)
     {
-        let mls = state.chat.mls.lock().unwrap();
+        let mls = state.chat()?.mls.lock().unwrap();
         for ev in &events {
             let _ = mls.process(ev);
         }
     }
     let messages = {
-        let mls = state.chat.mls.lock().unwrap();
+        let mls = state.chat()?.mls.lock().unwrap();
         mls.get_messages(&group_ref)?
     };
     Ok(messages
@@ -650,7 +655,7 @@ pub async fn handle_hub_rpc(state: &Arc<State>, caller: &str, payload: &str) -> 
 /// symmetric grant is already in place (the joiner redeemed our/ their invite).
 async fn add_member(state: &Arc<State>, group_ref: &str, key_package: &str) -> Result<String> {
     {
-        let hubs = state.chat.hubs.lock().await;
+        let hubs = state.chat()?.hubs.lock().await;
         let rec = hubs.get(group_ref).ok_or_else(|| anyhow!("unknown hub"))?;
         if !rec.owner {
             return Err(anyhow!("not the owner of this hub"));
@@ -659,10 +664,10 @@ async fn add_member(state: &Arc<State>, group_ref: &str, key_package: &str) -> R
     let key_package: Event =
         Event::from_json(key_package.as_bytes()).context("parse key package")?;
     let (welcome, evolution) = {
-        let mls = state.chat.mls.lock().unwrap();
+        let mls = state.chat()?.mls.lock().unwrap();
         mls.add_member(group_ref, &key_package)?
     };
-    state.chat.relay.publish(evolution);
+    state.chat()?.relay.publish(evolution);
     state.emit("hub_member_added", serde_json::json!({ "group_ref": group_ref }));
     Ok(welcome.as_json())
 }
@@ -680,7 +685,7 @@ async fn handle_welcome(
     let welcome: UnsignedEvent =
         UnsignedEvent::from_json(welcome.as_bytes()).context("parse welcome")?;
     let joined = {
-        let mls = state.chat.mls.lock().unwrap();
+        let mls = state.chat()?.mls.lock().unwrap();
         mls.join_from_welcome(&welcome)?
     };
     // the owner became our peer during the symmetric redeem
@@ -689,8 +694,8 @@ async fn handle_welcome(
         grants.grants.peers.iter().find(|p| p.node_id == caller).cloned()
     };
     let record = HubRecord { name: hub_name, owner: false, owner_peer };
-    state.chat.hubs.lock().await.insert(joined.clone(), record);
-    state.chat.save_hubs().await;
+    state.chat()?.hubs.lock().await.insert(joined.clone(), record);
+    state.chat()?.save_hubs().await;
     state.emit("hub_joined", serde_json::json!({ "group_ref": joined }));
     Ok(())
 }
@@ -702,10 +707,11 @@ pub async fn serve_nostr(
     recv: iroh::endpoint::RecvStream,
     send: iroh::endpoint::SendStream,
 ) -> Result<()> {
+    let Ok(chat) = state.chat() else { return Ok(()) }; // chat disabled
     if !state.config.read().await.chat.embedded_relay {
         return Ok(()); // embedded relay disabled; peers must use external relays
     }
-    filestr_chat::transport::serve_relay(state.chat.relay.clone(), recv, send).await
+    filestr_chat::transport::serve_relay(chat.relay.clone(), recv, send).await
 }
 
 // === member→owner relay client over the `nostr` stream ===

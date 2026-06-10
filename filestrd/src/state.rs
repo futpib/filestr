@@ -29,8 +29,10 @@ pub struct State {
     pub recent_sources: tokio::sync::Mutex<RecentSources>,
     pub transfers: tokio::sync::Mutex<crate::transfers::Transfers>,
     pub reputation: tokio::sync::Mutex<RepState>,
+    /// The chat plane, or None when `[chat] enabled = false` (the node runs and
+    /// peers files with no nostr).
     #[cfg(feature = "chat")]
-    pub chat: crate::chat::ChatState,
+    pub chat: Option<crate::chat::ChatState>,
     pub events: tokio::sync::broadcast::Sender<Event>,
     pub shutdown: tokio_util::sync::CancellationToken,
 }
@@ -38,6 +40,14 @@ pub struct State {
 impl State {
     pub fn emit(&self, event_type: &str, payload: serde_json::Value) {
         let _ = self.events.send(Event { event_type: event_type.to_string(), payload });
+    }
+
+    /// Borrow the chat plane, erroring if it's disabled.
+    #[cfg(feature = "chat")]
+    pub fn chat(&self) -> anyhow::Result<&crate::chat::ChatState> {
+        self.chat
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("chat plane is disabled; set [chat] enabled = true and restart"))
     }
 
     /// Resolve the effective reputation policy for a peer (config + the peer's

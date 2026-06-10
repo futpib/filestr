@@ -185,6 +185,10 @@ pub struct ShareRoot {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ChatConfig {
+    /// Activate the chat plane (nostr identity, MLS store, hub commands,
+    /// relays). When false the node runs and peers files with no nostr at all;
+    /// flip it on and restart to join hubs later. Default on.
+    pub enabled: bool,
     /// Serve the embedded relay to grantees over the iroh `nostr` stream.
     pub embedded_relay: bool,
     /// Optionally also expose the embedded relay as a standard NIP-01 relay on
@@ -201,6 +205,7 @@ pub struct ChatConfig {
 impl Default for ChatConfig {
     fn default() -> Self {
         Self {
+            enabled: true,
             embedded_relay: true,
             relay_listen: None,
             relays: Vec::new(),

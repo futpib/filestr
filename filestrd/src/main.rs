@@ -175,18 +175,26 @@ async fn main() -> Result<()> {
     let rep_store = libfilestr::reputation::RepStore::load_or_default(&rep_path)
         .context("loading reputation.json")?;
 
+    // chat plane is opt-out at runtime: default on, but `[chat] enabled =
+    // false` runs a pure file-peering node with no nostr (join hubs later by
+    // enabling it and restarting).
     #[cfg(feature = "chat")]
-    let chat_state = {
+    let chat_state = if config.chat.enabled {
         let identity =
             filestr_chat::Identity::from_root(&root).context("building nostr identity")?;
         let mls_key = root.derive(libfilestr::keys::CTX_MLS_DB);
-        crate::chat::ChatState::open(
-            identity,
-            state_dir.join("mls.sqlite"),
-            mls_key,
-            state_dir.join("hubs.json"),
+        Some(
+            crate::chat::ChatState::open(
+                identity,
+                state_dir.join("mls.sqlite"),
+                mls_key,
+                state_dir.join("hubs.json"),
+            )
+            .context("opening chat state")?,
         )
-        .context("opening chat state")?
+    } else {
+        tracing::info!("chat plane disabled (file peering only)");
+        None
     };
 
     let (events, _) = tokio::sync::broadcast::channel(256);
@@ -220,7 +228,7 @@ async fn main() -> Result<()> {
     let ctl_task = tokio::spawn(ctl_server::run(state.clone(), socket.clone()));
 
     #[cfg(feature = "chat")]
-    {
+    if state.chat.is_some() {
         crate::chat::spawn_relay_listener(state.clone()).await;
         crate::chat::spawn_dm_listener(state.clone()).await;
     }
