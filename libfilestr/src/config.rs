@@ -21,10 +21,14 @@ pub struct Config {
     pub data_dir: Option<PathBuf>,
     /// Relay usage: "default" (n0 public relays) or "disabled" (direct only).
     pub relay: RelaySetting,
+    /// Custom iroh relay server URLs. If non-empty, these are used instead of
+    /// the `relay` setting (self-hosted relays).
+    pub relay_urls: Vec<String>,
     pub reshare: ReshareConfig,
     pub search: SearchConfig,
     pub invite: InviteConfig,
     pub reputation: ReputationConfig,
+    pub chat: ChatConfig,
     /// Shared directories. Each root has a unique name used by views.
     pub share: Vec<ShareRoot>,
     /// Named views: view name -> list of share root names. The view "full"
@@ -175,6 +179,26 @@ impl Default for InviteConfig {
 pub struct ShareRoot {
     pub name: String,
     pub path: PathBuf,
+}
+
+/// Chat-plane (nostr) relay configuration. Used only with the `chat` feature.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ChatConfig {
+    /// Serve the embedded relay to grantees over the iroh `nostr` stream.
+    pub embedded_relay: bool,
+    /// Optionally also expose the embedded relay as a standard NIP-01 relay on
+    /// this TCP WebSocket address (e.g. "127.0.0.1:7777").
+    pub relay_listen: Option<String>,
+    /// External nostr relay URLs (ws:// or wss://) to also publish hub events
+    /// to and read them from, and to advertise in hub metadata.
+    pub relays: Vec<String>,
+}
+
+impl Default for ChatConfig {
+    fn default() -> Self {
+        Self { embedded_relay: true, relay_listen: None, relays: Vec::new() }
+    }
 }
 
 #[derive(Debug)]

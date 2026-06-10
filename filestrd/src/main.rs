@@ -129,9 +129,21 @@ async fn main() -> Result<()> {
     let secret_key = load_iroh_key(&data_dir, &root)?;
     let store = FsStore::load(cache_dir.join("blobs")).await.context("opening blob store")?;
 
-    let relay_mode = match config.relay {
-        RelaySetting::Default => default_relay_mode(),
-        RelaySetting::Disabled => RelayMode::Disabled,
+    let relay_mode = if !config.relay_urls.is_empty() {
+        // self-hosted / custom iroh relays take precedence over the preset
+        let mut urls = Vec::new();
+        for u in &config.relay_urls {
+            urls.push(
+                u.parse::<iroh::RelayUrl>().with_context(|| format!("bad relay url {u:?}"))?,
+            );
+        }
+        tracing::info!(count = urls.len(), "using custom iroh relays");
+        RelayMode::custom(urls)
+    } else {
+        match config.relay {
+            RelaySetting::Default => default_relay_mode(),
+            RelaySetting::Disabled => RelayMode::Disabled,
+        }
     };
     // presets::Minimal on purpose: no address lookup at all — this node is
     // never published anywhere; it is dialable only via tickets (DESIGN.md §2)
@@ -196,6 +208,9 @@ async fn main() -> Result<()> {
         .spawn();
 
     let ctl_task = tokio::spawn(ctl_server::run(state.clone(), socket.clone()));
+
+    #[cfg(feature = "chat")]
+    crate::chat::spawn_relay_listener(state.clone()).await;
 
     let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;

@@ -7,11 +7,13 @@ license.workspace = true
 [dependencies]
 anyhow = "1.0.102"
 data-encoding = "2.11.0"
+futures-util = "0.3.32"
 libfilestr = { path = "../libfilestr" }
 mdk-core = "0.8.0"
 mdk-memory-storage = "0.8.0"
 nostr = { version = "0.44.3", features = ["nip44"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"
-tokio = { version = "1.52.3", features = ["rt", "sync", "io-util", "macros", "time"] }
+tokio = { version = "1.52.3", features = ["rt", "sync", "io-util", "macros", "time", "net"] }
+tokio-tungstenite = { version = "0.29.0", features = ["rustls-tls-webpki-roots"] }
 tracing = "0.1.44"

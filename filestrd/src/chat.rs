@@ -52,8 +52,54 @@ impl ChatState {
     }
 }
 
-fn synth_relay() -> RelayUrl {
-    RelayUrl::parse(SYNTH_RELAY).expect("valid synthetic relay url")
+/// Relay URLs to stamp into hub metadata: the configured external relays, or
+/// the synthetic placeholder if none (the real transport is the iroh tunnel).
+async fn hub_relays(state: &Arc<State>) -> Vec<RelayUrl> {
+    let configured = state.config.read().await.chat.relays.clone();
+    let parsed: Vec<RelayUrl> = configured.iter().filter_map(|u| RelayUrl::parse(u).ok()).collect();
+    if parsed.is_empty() {
+        vec![RelayUrl::parse(SYNTH_RELAY).expect("valid synthetic relay url")]
+    } else {
+        parsed
+    }
+}
+
+/// External nostr relay URLs configured for this node.
+async fn external_relays(state: &Arc<State>) -> Vec<String> {
+    state.config.read().await.chat.relays.clone()
+}
+
+/// Spawn the optional WebSocket relay listener so the embedded relay is also
+/// reachable as a standard NIP-01 relay. Called once at startup.
+pub async fn spawn_relay_listener(state: Arc<State>) {
+    let addr = { state.config.read().await.chat.relay_listen.clone() };
+    let Some(addr) = addr else { return };
+    let listener = match tokio::net::TcpListener::bind(&addr).await {
+        Ok(l) => l,
+        Err(e) => {
+            tracing::warn!("nostr relay listen on {addr} failed: {e}");
+            return;
+        }
+    };
+    tracing::info!("nostr relay (websocket) listening on {addr}");
+    let relay = state.chat.relay.clone();
+    let shutdown = state.shutdown.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                _ = shutdown.cancelled() => break,
+                accepted = listener.accept() => {
+                    let Ok((stream, _)) = accepted else { continue };
+                    let relay = relay.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = filestr_chat::transport::accept_ws(relay, stream).await {
+                            tracing::debug!("ws relay connection ended: {e}");
+                        }
+                    });
+                }
+            }
+        }
+    });
 }
 
 fn message_filter() -> Filter {
@@ -98,9 +144,10 @@ async fn find_hub(state: &Arc<State>, needle: &str) -> Result<String> {
 // === ctl handlers ===
 
 pub async fn create(state: &Arc<State>, name: String) -> Result<HubInfo> {
+    let relays = hub_relays(state).await;
     let group_ref = {
         let mls = state.chat.mls.lock().unwrap();
-        mls.create_group(&name, &synth_relay())?
+        mls.create_group(&name, &relays)?
     };
     let record = HubRecord { name, owner: true, owner_peer: None };
     let info = hub_info(&record, &group_ref, 1);
@@ -144,9 +191,10 @@ pub async fn join(state: &Arc<State>, ticket_str: String) -> Result<HubInfo> {
         .context("redeeming hub invite")?;
 
     // 2. our MLS key package + a reciprocal file invite (share-to-join).
+    let relays = hub_relays(state).await;
     let key_package = {
         let mls = state.chat.mls.lock().unwrap();
-        mls.key_package_event(&synth_relay())?.as_json()
+        mls.key_package_event(&relays)?.as_json()
     };
     let (reciprocal, _) =
         ctl_server::mint_invite(state, None, Some(format!("hub:{}", ticket.name)), None, None)
@@ -213,12 +261,18 @@ pub async fn send(state: &Arc<State>, hub: String, text: String) -> Result<()> {
         };
         (event, owner_peer)
     };
-    match owner_peer {
+    match &owner_peer {
         None => {
             // we host the relay
-            state.chat.relay.publish(event);
+            state.chat.relay.publish(event.clone());
         }
-        Some(owner) => publish_to_owner(state, &owner, event).await?,
+        Some(owner) => publish_to_owner(state, owner, event.clone()).await?,
+    }
+    // also publish to any configured external nostr relays
+    for url in external_relays(state).await {
+        if let Err(e) = filestr_chat::transport::ws_publish(&url, event.clone()).await {
+            tracing::debug!("publish to {url} failed: {e:#}");
+        }
     }
     state.emit("hub_sent", serde_json::json!({ "group_ref": group_ref }));
     Ok(())
@@ -232,10 +286,17 @@ pub async fn log(state: &Arc<State>, hub: String) -> Result<Vec<ChatMessage>> {
     };
 
     // gather group-message events from whichever relay we can reach
-    let events = match &owner_peer {
+    let mut events = match &owner_peer {
         None => state.chat.relay.query(&[message_filter()]),
         Some(owner) => fetch_from_owner(state, owner).await?,
     };
+    // plus any configured external nostr relays
+    for url in external_relays(state).await {
+        match filestr_chat::transport::ws_fetch(&url, vec![message_filter()]).await {
+            Ok(mut more) => events.append(&mut more),
+            Err(e) => tracing::debug!("fetch from {url} failed: {e:#}"),
+        }
+    }
     // advance MLS state with anything new (own/duplicate events are ignored)
     {
         let mls = state.chat.mls.lock().unwrap();
@@ -304,6 +365,9 @@ pub async fn serve_nostr(
     recv: iroh::endpoint::RecvStream,
     send: iroh::endpoint::SendStream,
 ) -> Result<()> {
+    if !state.config.read().await.chat.embedded_relay {
+        return Ok(()); // embedded relay disabled; peers must use external relays
+    }
     filestr_chat::transport::serve_relay(state.chat.relay.clone(), recv, send).await
 }
 

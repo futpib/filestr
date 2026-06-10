@@ -56,6 +56,8 @@ So a backup of the data dir is the whole identity; clearing the cache just trigg
 
 **No public discovery.** The iroh endpoint does not publish to pkarr/DNS discovery. A node's dialable `NodeAddr` (relay URL + optional direct addrs) travels only inside invites. Knowing a NodeId alone resolves to nothing.
 
+**Configurable iroh relays.** `relay = "default"` uses n0's public relays, `"disabled"` is direct-only, and `relay_urls = [...]` points the endpoint at self-hosted relay servers instead. Relays only assist connectivity (hole-punching / fallback); they never see plaintext.
+
 **Identity binding** needs no extra ceremony: an invite token is delivered over a channel the grantor already trusts (a pasted ticket, or — with the chat plane — an E2EE DM to a specific nostr identity), and redemption pins the redeeming NodeId. The token links "person I gave the ticket to" to "node now connecting".
 
 ## 3. Grants
@@ -205,6 +207,13 @@ The `nostr` stream type tunnels the nostr relay protocol (NIP-01 client↔relay 
 
 The `hub` request is a small control RPC (opaque to the wire layer; the `chat` feature defines the payload) used for the join handshake — carrying the joiner's MLS key package + reciprocal invite and returning the MLS welcome.
 
+**Configurable nostr relays.** The chat plane's relays are configurable under `[chat]`:
+- `embedded_relay` (default true) — serve the embedded relay over the iroh `nostr` stream.
+- `relay_listen` (e.g. `"127.0.0.1:7777"`) — additionally expose the embedded relay as a **standard WebSocket NIP-01 relay**, so ordinary nostr clients (or other filestr nodes) can use this node as a relay.
+- `relays = ["wss://…", "ws://…"]` — external nostr relays the node also publishes hub events to and reads them from (over WebSocket), and advertises in hub metadata.
+
+So a deployment can run hubs entirely over the iroh tunnel (zero external infra, the default), entirely over public/self-hosted nostr relays (`embedded_relay = false`, `relays = [...]`), or both. The same code path verifies MLS regardless of which relay carried the event.
+
 ## 9. Settings
 
 | setting | scope | default |
@@ -257,6 +266,7 @@ Per-peer overrides let you, say, give a trusted friend an effectively unlimited 
 | `iroh-blobs` | BLAKE3/bao verified streaming + provider/get over abstract streams | used as a library, carried inline on `filestr/0`; filestr gates access itself |
 | `mdk-core` + `mdk-memory-storage` (Marmot, on OpenMLS) | MLS hubs — groups, key packages, welcomes, messages | **`chat` feature**; audited 2026; spec still evolving — pinned at 0.8 |
 | `nostr` (rust-nostr) | nostr keys/events/filters, NIP-01 relay messages for §8.2 | **`chat` feature**, pinned at 0.44 |
+| `tokio-tungstenite` | WebSocket server/client for external/standard nostr relays | **`chat` feature** (wss via rustls) |
 | `serde_json` | wire encoding (p2p + control socket), grant persistence (atomic writes) | |
 
 ## 12. v1 implementation notes (deliberate simplifications)

@@ -51,10 +51,10 @@ impl Mls {
 
     /// Build a signed key-package event (kind:30443) advertising us as
     /// addable to a group.
-    pub fn key_package_event(&self, relay: &RelayUrl) -> Result<Event> {
+    pub fn key_package_event(&self, relays: &[RelayUrl]) -> Result<Event> {
         let data = self
             .mdk
-            .create_key_package_for_event(&self.keys.public_key(), [relay.clone()])
+            .create_key_package_for_event(&self.keys.public_key(), relays.iter().cloned())
             .map_err(|e| anyhow!("create key package: {e}"))?;
         let event = EventBuilder::new(Kind::Custom(KIND_KEY_PACKAGE), data.content)
             .tags(data.tags_30443)
@@ -65,14 +65,14 @@ impl Mls {
 
     /// Create a new group owned by us (we are the sole admin/member). Returns
     /// the MLS group id as hex.
-    pub fn create_group(&self, name: &str, relay: &RelayUrl) -> Result<String> {
+    pub fn create_group(&self, name: &str, relays: &[RelayUrl]) -> Result<String> {
         let config = NostrGroupConfigData::new(
             name.to_string(),
             String::new(),
             None,
             None,
             None,
-            vec![relay.clone()],
+            relays.to_vec(),
             vec![self.keys.public_key()],
         );
         let result = self
@@ -213,13 +213,13 @@ mod tests {
 
     #[test]
     fn full_mls_roundtrip() {
-        let relay = RelayUrl::parse("ws://localhost:8080").unwrap();
+        let relays = [RelayUrl::parse("ws://localhost:8080").unwrap()];
         let owner = Mls::new(Keys::generate());
         let member = Mls::new(Keys::generate());
 
         // owner creates the hub, member publishes a key package, owner adds them
-        let gid = owner.create_group("test hub", &relay).unwrap();
-        let kp = member.key_package_event(&relay).unwrap();
+        let gid = owner.create_group("test hub", &relays).unwrap();
+        let kp = member.key_package_event(&relays).unwrap();
         let (welcome, _evolution) = owner.add_member(&gid, &kp).unwrap();
         let member_gid = member.join_from_welcome(&welcome).unwrap();
         assert_eq!(member_gid, gid, "both sides share one MLS group id");

@@ -72,6 +72,12 @@ Daemon and CLI follow the slopd/slopctl shape: unix socket at
 `$XDG_RUNTIME_DIR/filestrd/filestrd.sock`, JSON-lines protocol, TOML config,
 state under `~/.local/share/filestr/`.
 
+Relays are configurable on both planes. iroh connectivity: `relay = "default"`
+/ `"disabled"` / `relay_urls = ["https://my.relay./"]`. nostr chat: `[chat]`
+with `embedded_relay`, `relay_listen = "127.0.0.1:7777"` (expose this node as a
+standard WebSocket nostr relay), and `relays = ["wss://relay…"]` (use external
+relays). Default is zero external infrastructure — hubs ride the iroh tunnel.
+
 ## Tests
 
 ```sh
