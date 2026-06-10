@@ -47,10 +47,9 @@ filestrctl rescan
 filestrctl invite create --label alice    # prints a filestr1… ticket; send it
                                           # to Alice over any channel you trust
 
-# discover + join a hub over nostr (no hand-passed ticket):
-filestrctl hub announce general           # owner: publish a discoverable note
-filestrctl hub discover                   # newcomer: list hubs seen on relays
-filestrctl hub request --hub <ref> --to <owner-npub>   # send a join request
+# join a hub over nostr (no hand-passed ticket, no public notes):
+filestrctl hub address general            # owner: small shareable hub address
+filestrctl hub request filestraddr1…      # newcomer: gift-wrapped join request
 filestrctl hub pending                    # owner: review requests (if not auto)
 #   set [chat] auto_admit = true for open hubs
 

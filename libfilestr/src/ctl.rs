@@ -97,17 +97,15 @@ pub enum RequestBody {
     HubJoin {
         ticket: String,
     },
-    /// Produce a join-request ticket (`filestrreq1…`), optionally delivering it
-    /// to a hub owner over nostr (`to` = owner npub/hex, `relay` = where).
+    /// Produce a join-request ticket (`filestrreq1…`). With `address` (a hub's
+    /// `filestraddr1…`), also gift-wrap and send it to the owner over nostr.
     HubRequest {
+        #[serde(default)]
+        address: Option<String>,
         #[serde(default)]
         hub: Option<String>,
         #[serde(default)]
         label: Option<String>,
-        #[serde(default)]
-        to: Option<String>,
-        #[serde(default)]
-        relay: Option<String>,
     },
     /// Admit a join-request ticket into a hub we own.
     HubAdmit {
@@ -115,12 +113,10 @@ pub enum RequestBody {
         #[serde(default)]
         hub: Option<String>,
     },
-    /// Publish a public announcement for a hub we own.
-    HubAnnounce {
+    /// Get a hub's shareable address (`filestraddr1…`) for a hub we own.
+    HubAddress {
         hub: String,
     },
-    /// Discover hubs announced on the configured relays.
-    HubDiscover,
     /// List join requests received over nostr awaiting manual admit.
     HubPending,
     /// List hubs we own or have joined.
@@ -167,10 +163,9 @@ pub enum ResponseBody {
     HubCreated { hub: HubInfo },
     HubInvite { ticket: String },
     HubJoined { hub: HubInfo },
-    HubRequestTicket { ticket: String },
+    HubRequestTicket { ticket: String, sent: bool },
     HubAdmitted { hub: HubInfo },
-    HubAnnounced,
-    HubDiscovered { hubs: Vec<HubAnnouncement> },
+    HubAddress { address: String },
     HubPending { requests: Vec<PendingRequest> },
     Hubs { hubs: Vec<HubInfo> },
     HubMembers { members: Vec<String> },
@@ -273,17 +268,6 @@ pub struct HubInfo {
     /// True if this node owns the hub (hosts its relay).
     pub owner: bool,
     pub members: usize,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HubAnnouncement {
-    pub name: String,
-    /// MLS group ref (the hub handle).
-    pub group_ref: String,
-    /// Owner nostr pubkey (hex) — send your join request here.
-    pub owner: String,
-    /// Relays to reach the owner on.
-    pub relays: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

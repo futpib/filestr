@@ -93,19 +93,15 @@ enum HubCommand {
     Invite { hub: String },
     /// Join a hub from a filestrhub1… ticket
     Join { ticket: String },
-    /// Produce a join-request ticket (optionally sent to an owner over nostr)
+    /// Produce a join-request ticket; with a hub address, also send it over nostr
     Request {
-        /// Target hub (group-ref) — optional; the owner can also choose
+        /// A hub address (filestraddr1…) — sends the request to its owner
+        address: Option<String>,
+        /// Target hub group-ref (for out-of-band requests without an address)
         #[arg(long)]
         hub: Option<String>,
         #[arg(long)]
         label: Option<String>,
-        /// Owner pubkey (npub/hex) to deliver the request to over nostr
-        #[arg(long)]
-        to: Option<String>,
-        /// Relay to send the request through (defaults to configured relays)
-        #[arg(long)]
-        relay: Option<String>,
     },
     /// Admit a join-request ticket into a hub you own
     Admit {
@@ -114,10 +110,8 @@ enum HubCommand {
         #[arg(long)]
         hub: Option<String>,
     },
-    /// Publish a public announcement for a hub you own
-    Announce { hub: String },
-    /// Discover hubs announced on your configured relays
-    Discover,
+    /// Print a hub's shareable address (for a hub you own)
+    Address { hub: String },
     /// List join requests received over nostr awaiting admit
     Pending,
     /// List hubs you own or have joined
@@ -558,11 +552,10 @@ async fn run_hub(client: &mut Client, json: bool, command: HubCommand) -> Result
                 println!("joined hub {} ({})", hub.name, hub.group_ref);
             }
         }
-        HubCommand::Request { hub, label, to, relay } => {
-            let sent = to.is_some();
+        HubCommand::Request { address, hub, label } => {
             let response =
-                client.roundtrip(RequestBody::HubRequest { hub, label, to, relay }).await?;
-            let ResponseBody::HubRequestTicket { ticket } = response else {
+                client.roundtrip(RequestBody::HubRequest { address, hub, label }).await?;
+            let ResponseBody::HubRequestTicket { ticket, sent } = response else {
                 bail!("unexpected response")
             };
             if json {
@@ -575,30 +568,16 @@ async fn run_hub(client: &mut Client, json: bool, command: HubCommand) -> Result
                 eprintln!("send this to the hub owner; they run: filestrctl hub admit <ticket>");
             }
         }
-        HubCommand::Announce { hub } => {
-            let response = client.roundtrip(RequestBody::HubAnnounce { hub }).await?;
-            let ResponseBody::HubAnnounced = response else { bail!("unexpected response") };
-            if !json {
-                println!("announced");
-            }
-        }
-        HubCommand::Discover => {
-            let response = client.roundtrip(RequestBody::HubDiscover).await?;
-            let ResponseBody::HubDiscovered { hubs } = response else {
+        HubCommand::Address { hub } => {
+            let response = client.roundtrip(RequestBody::HubAddress { hub }).await?;
+            let ResponseBody::HubAddress { address } = response else {
                 bail!("unexpected response")
             };
             if json {
-                print_json(&hubs);
+                print_json(&serde_json::json!({ "address": address }));
             } else {
-                for h in hubs {
-                    println!(
-                        "{:<20} owner={} relays=[{}]\n  ref={}",
-                        h.name,
-                        &h.owner[..h.owner.len().min(16)],
-                        h.relays.join(", "),
-                        h.group_ref
-                    );
-                }
+                println!("{address}");
+                eprintln!("share this; others run: filestrctl hub request <address>");
             }
         }
         HubCommand::Pending => {

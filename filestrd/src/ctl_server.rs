@@ -133,12 +133,11 @@ async fn handle_simple(state: &Arc<State>, body: RequestBody) -> ResponseBody {
         RequestBody::HubCreate { name } => handle_hub_create(state, name).await,
         RequestBody::HubInvite { hub } => handle_hub_invite(state, hub).await,
         RequestBody::HubJoin { ticket } => handle_hub_join(state, ticket).await,
-        RequestBody::HubRequest { hub, label, to, relay } => {
-            handle_hub_request(state, hub, label, to, relay).await
+        RequestBody::HubRequest { address, hub, label } => {
+            handle_hub_request(state, address, hub, label).await
         }
         RequestBody::HubAdmit { ticket, hub } => handle_hub_admit(state, ticket, hub).await,
-        RequestBody::HubAnnounce { hub } => handle_hub_announce(state, hub).await,
-        RequestBody::HubDiscover => handle_hub_discover(state).await,
+        RequestBody::HubAddress { hub } => handle_hub_address(state, hub).await,
         RequestBody::HubPending => handle_hub_pending(state).await,
         RequestBody::HubList => handle_hub_list(state).await,
         RequestBody::HubMembers { hub } => handle_hub_members(state, hub).await,
@@ -587,14 +586,13 @@ async fn handle_hub_join(state: &Arc<State>, ticket: String) -> Result<ResponseB
 #[cfg(feature = "chat")]
 async fn handle_hub_request(
     state: &Arc<State>,
+    address: Option<String>,
     hub: Option<String>,
     label: Option<String>,
-    to: Option<String>,
-    relay: Option<String>,
 ) -> Result<ResponseBody> {
-    Ok(ResponseBody::HubRequestTicket {
-        ticket: crate::chat::request(state, hub, label, to, relay).await?,
-    })
+    let sent = address.is_some();
+    let ticket = crate::chat::request(state, address, hub, label).await?;
+    Ok(ResponseBody::HubRequestTicket { ticket, sent })
 }
 #[cfg(feature = "chat")]
 async fn handle_hub_admit(
@@ -605,13 +603,8 @@ async fn handle_hub_admit(
     Ok(ResponseBody::HubAdmitted { hub: crate::chat::admit(state, ticket, hub).await? })
 }
 #[cfg(feature = "chat")]
-async fn handle_hub_announce(state: &Arc<State>, hub: String) -> Result<ResponseBody> {
-    crate::chat::announce(state, hub).await?;
-    Ok(ResponseBody::HubAnnounced)
-}
-#[cfg(feature = "chat")]
-async fn handle_hub_discover(state: &Arc<State>) -> Result<ResponseBody> {
-    Ok(ResponseBody::HubDiscovered { hubs: crate::chat::discover(state).await? })
+async fn handle_hub_address(state: &Arc<State>, hub: String) -> Result<ResponseBody> {
+    Ok(ResponseBody::HubAddress { address: crate::chat::address(state, hub).await? })
 }
 #[cfg(feature = "chat")]
 async fn handle_hub_pending(state: &Arc<State>) -> Result<ResponseBody> {
@@ -658,7 +651,6 @@ async fn handle_hub_request(
     _: Option<String>,
     _: Option<String>,
     _: Option<String>,
-    _: Option<String>,
 ) -> Result<ResponseBody> {
     Err(anyhow!("chat plane not enabled in this build"))
 }
@@ -667,11 +659,7 @@ async fn handle_hub_admit(_: &Arc<State>, _: String, _: Option<String>) -> Resul
     Err(anyhow!("chat plane not enabled in this build"))
 }
 #[cfg(not(feature = "chat"))]
-async fn handle_hub_announce(_: &Arc<State>, _: String) -> Result<ResponseBody> {
-    Err(anyhow!("chat plane not enabled in this build"))
-}
-#[cfg(not(feature = "chat"))]
-async fn handle_hub_discover(_: &Arc<State>) -> Result<ResponseBody> {
+async fn handle_hub_address(_: &Arc<State>, _: String) -> Result<ResponseBody> {
     Err(anyhow!("chat plane not enabled in this build"))
 }
 #[cfg(not(feature = "chat"))]

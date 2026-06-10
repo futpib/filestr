@@ -96,14 +96,15 @@ privacy properties."*
    by `test-persistence.sh` (groups, membership, history survive cold restart;
    db has no plaintext). `hub log` also no longer fails when the owner is
    offline — it returns stored history.
-2. ~~**No discover + request-to-join over nostr**~~ **DONE** — `hub announce`
-   publishes a discoverable hub note; `hub discover` lists hubs from relays;
-   `hub request --to <owner>` sends the `filestrreq1…` ticket as a NIP-44
-   encrypted DM over a relay; the owner's daemon listens, decrypts, and either
-   auto-admits (`[chat].auto_admit`) or queues for `hub pending` / `hub admit`.
-   Verified by `test-hub-discover.sh` (announce → discover → request →
-   auto-admit, **no prior grant**). Hardening left: full NIP-17 gift-wrap for
-   sender anonymity, and gating auto-admit on the reputation/vouch policy.
+2. ~~**No request-to-join over nostr**~~ **DONE** — and Whitenoise-only: the
+   owner shares a small `hub address` (no public note); `hub request <address>`
+   sends the `filestrreq1…` ticket **NIP-17 gift-wrapped** to the owner over a
+   relay; the owner's daemon unwraps it and either auto-admits
+   (`[chat].auto_admit`) or queues for `hub pending` / `hub admit`. Every nostr
+   event we emit is now MLS (445) or a gift wrap (1059) — no public notes.
+   Verified by `test-hub-address.sh` (address → gift-wrapped request →
+   auto-admit, **no prior grant**, no plaintext ticket on disk). Hardening
+   left: gate auto-admit on the reputation/vouch policy.
 3. **Hub availability** — owner-offline kills join + sync; no multi-admin or
    member relay federation. *(Now the top open blocker.)*
 4. **Onboarding friction** — no packaged install (no AUR/binary release), no

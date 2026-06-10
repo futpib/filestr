@@ -49,6 +49,49 @@ impl HubTicket {
     }
 }
 
+pub const ADDR_PREFIX: &str = "filestraddr1";
+pub const ADDR_VERSION: u8 = 0;
+
+/// A hub's public address: a small, shareable pointer (owner key + relays +
+/// group ref) the owner hands out however they like — pasted, in a nostr bio,
+/// a QR. It is **not** a ticket: no token, no grant, not single-use, and the
+/// daemon never publishes it as a note (all our nostr messages stay Whitenoise).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HubAddress {
+    pub v: u8,
+    pub name: String,
+    /// MLS group ref (the hub handle).
+    pub group_ref: String,
+    /// Owner nostr pubkey (hex) — gift-wrapped join requests go here.
+    pub owner: String,
+    /// Relays to send the request through.
+    #[serde(default)]
+    pub relays: Vec<String>,
+}
+
+impl HubAddress {
+    pub fn encode(&self) -> String {
+        let json = serde_json::to_vec(self).expect("hub address serializes");
+        format!("{ADDR_PREFIX}{}", data_encoding::BASE32_NOPAD.encode(&json).to_ascii_lowercase())
+    }
+
+    pub fn parse(s: &str) -> Result<Self> {
+        let body = s
+            .trim()
+            .strip_prefix(ADDR_PREFIX)
+            .ok_or_else(|| anyhow!("not a filestr hub address (expected {ADDR_PREFIX}…)"))?;
+        let bytes = data_encoding::BASE32_NOPAD
+            .decode(body.to_ascii_uppercase().as_bytes())
+            .map_err(|_| anyhow!("hub address base32 decode failed"))?;
+        let addr: HubAddress =
+            serde_json::from_slice(&bytes).map_err(|e| anyhow!("hub address invalid: {e}"))?;
+        if addr.v != ADDR_VERSION {
+            return Err(anyhow!("hub address version {} not supported; upgrade filestr", addr.v));
+        }
+        Ok(addr)
+    }
+}
+
 pub const REQ_PREFIX: &str = "filestrreq1";
 pub const REQ_TICKET_VERSION: u8 = 0;
 
