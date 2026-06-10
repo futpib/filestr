@@ -147,12 +147,25 @@ async fn main() -> Result<()> {
     };
     // presets::Minimal on purpose: no address lookup at all — this node is
     // never published anywhere; it is dialable only via tickets (DESIGN.md §2)
-    let endpoint = Endpoint::builder(presets::Minimal)
+    let mut builder = Endpoint::builder(presets::Minimal)
         .secret_key(secret_key)
-        .relay_mode(relay_mode)
-        .bind()
-        .await
-        .context("binding iroh endpoint")?;
+        .relay_mode(relay_mode);
+    // On Android the default DNS resolver reads the system config via
+    // `ndk-context`, which panics in a standalone process with no JVM attached.
+    // Pin public UDP resolvers so relay hostnames still resolve.
+    #[cfg(target_os = "android")]
+    {
+        use iroh::dns::{DnsProtocol, DnsResolver};
+        builder = builder.dns_resolver(
+            DnsResolver::builder()
+                .with_nameservers([
+                    ("8.8.8.8:53".parse().unwrap(), DnsProtocol::Udp),
+                    ("1.1.1.1:53".parse().unwrap(), DnsProtocol::Udp),
+                ])
+                .build(),
+        );
+    }
+    let endpoint = builder.bind().await.context("binding iroh endpoint")?;
     tracing::info!(endpoint_id = %endpoint.id(), "endpoint bound");
 
     let initial_index = index::scan(&config, &store).await?;

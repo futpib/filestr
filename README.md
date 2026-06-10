@@ -28,6 +28,10 @@ Both planes are implemented and covered by e2e tests.
   (share-to-join). Built behind the `chat` cargo feature (default on);
   `--no-default-features` gives a pure iroh-only build.
 
+There is also an **Android app** (files only) under [`app/`](app/): a
+Flutter/fvm front-end that bundles the iroh-only daemon and drives it over the
+same control protocol. See [app/README.md](app/README.md).
+
 See [DESIGN.md](DESIGN.md) for the protocol, [TICKETS.md](TICKETS.md) for the
 ticket/address reference, and [PLAN.md](PLAN.md) / [ROADMAP.md](ROADMAP.md)
 for the roadmap.
