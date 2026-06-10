@@ -1,71 +1,120 @@
-//! Key material. By default a single 32-byte **master seed** (persisted to
-//! `master.key`) deterministically derives every other key the node needs —
-//! the iroh transport key and the nostr identity — via domain-separated
-//! BLAKE3. Back up one file, get your whole identity.
+//! The node's root secret is its **nostr identity** (a secp256k1 key), stored
+//! as an `nsec` in `identity.key`. This is the portable, user-facing key —
+//! importable into nostr clients. The iroh transport key is *derived* from it
+//! one-way via domain-separated BLAKE3, so storing the single nsec covers the
+//! whole node identity.
 //!
-//! The iroh key can be overridden independently (see `iroh.key` handling in
-//! the daemon), e.g. to keep a pre-existing endpoint identity while letting
-//! the master seed drive everything else.
+//! The iroh key can still be overridden independently (see `iroh.key` in the
+//! daemon), e.g. to keep a fixed endpoint id while the nsec drives the rest.
 
 use std::path::Path;
 
 use anyhow::{Context, Result, anyhow};
+use bech32::Hrp;
 
-/// BLAKE3 derivation contexts. Stable strings — changing one rotates the
-/// derived key, so never edit these.
+/// BLAKE3 derivation context for the iroh transport key. Stable — changing it
+/// rotates the derived key.
 pub const CTX_IROH: &str = "filestr iroh transport key v1";
-pub const CTX_NOSTR: &str = "filestr nostr identity key v1";
 
-/// The node's root secret. Everything else is derived from it.
+const NSEC_HRP: &str = "nsec";
+
+/// secp256k1 group order (big-endian); a valid secret key is in `[1, N)`.
+const SECP256K1_N: [u8; 32] = [
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFE,
+    0xBA, 0xAE, 0xDC, 0xE6, 0xAF, 0x48, 0xA0, 0x3B, 0xBF, 0xD2, 0x5E, 0x8C, 0xD0, 0x36, 0x41, 0x41,
+];
+
+/// The node's root nostr secret. The iroh key derives from it.
 #[derive(Clone)]
-pub struct Master {
-    seed: [u8; 32],
+pub struct RootKey {
+    secret: [u8; 32],
 }
 
-impl Master {
-    /// Load the seed from `path`, generating and persisting one (0600) on
-    /// first use.
+impl RootKey {
+    /// Load the nsec (or raw hex) from `path`, generating and persisting one
+    /// (as an nsec, 0600) on first use.
     pub fn load_or_create(path: &Path) -> Result<Self> {
         match std::fs::read_to_string(path) {
-            Ok(text) => {
-                let bytes = data_encoding::HEXLOWER
-                    .decode(text.trim().as_bytes())
-                    .context("master.key is not valid hex")?;
-                let seed: [u8; 32] =
-                    bytes.try_into().map_err(|_| anyhow!("master.key must be 32 bytes"))?;
-                Ok(Self { seed })
-            }
+            Ok(text) => Self::parse(text.trim()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                let seed: [u8; 32] = rand::random();
-                write_secret(path, &data_encoding::HEXLOWER.encode(&seed))?;
-                Ok(Self { seed })
+                let secret = generate_scalar();
+                let root = Self { secret };
+                write_secret(path, &root.nsec()?)?;
+                Ok(root)
             }
-            Err(e) => Err(e).context("reading master.key"),
+            Err(e) => Err(e).context("reading identity.key"),
         }
     }
 
-    /// Derive 32 bytes for `context`. Distinct contexts yield independent keys.
-    pub fn derive(&self, context: &str) -> [u8; 32] {
-        blake3::derive_key(context, &self.seed)
+    /// Parse an `nsec1…` bech32 string or 64-char hex.
+    pub fn parse(s: &str) -> Result<Self> {
+        let secret = if s.starts_with("nsec1") {
+            let (hrp, data) = bech32::decode(s).context("decoding nsec")?;
+            if hrp.to_string() != NSEC_HRP {
+                return Err(anyhow!("not an nsec (hrp was {hrp})"));
+            }
+            data.try_into().map_err(|_| anyhow!("nsec payload must be 32 bytes"))?
+        } else {
+            let bytes = data_encoding::HEXLOWER
+                .decode(s.as_bytes())
+                .context("identity key is neither nsec nor hex")?;
+            bytes.try_into().map_err(|_| anyhow!("identity key must be 32 bytes"))?
+        };
+        if !is_valid_scalar(&secret) {
+            return Err(anyhow!("identity key is not a valid secp256k1 secret"));
+        }
+        Ok(Self { secret })
     }
 
-    /// Derive 32 bytes for `context` salted with `counter` — used to retry
-    /// when a derived value must satisfy extra constraints (e.g. a valid
-    /// secp256k1 scalar).
-    pub fn derive_counter(&self, context: &str, counter: u32) -> [u8; 32] {
-        let mut material = [0u8; 36];
-        material[..32].copy_from_slice(&self.seed);
-        material[32..].copy_from_slice(&counter.to_le_bytes());
-        blake3::derive_key(context, &material)
+    /// Render as an `nsec1…` string.
+    pub fn nsec(&self) -> Result<String> {
+        let hrp = Hrp::parse(NSEC_HRP).expect("nsec is a valid hrp");
+        bech32::encode::<bech32::Bech32>(hrp, &self.secret).context("encoding nsec")
+    }
+
+    /// The raw 32-byte secret (used by the chat plane to build nostr keys).
+    pub fn secret_bytes(&self) -> [u8; 32] {
+        self.secret
+    }
+
+    /// Derive the iroh ed25519 transport key seed.
+    pub fn derive_iroh(&self) -> [u8; 32] {
+        blake3::derive_key(CTX_IROH, &self.secret)
     }
 }
 
-/// Write `hex` to `path` with 0600 perms (atomic-ish: direct create).
-pub fn write_secret(path: &Path, hex: &str) -> Result<()> {
+/// Whether `b` is a valid secp256k1 secret: nonzero and `< N`.
+fn is_valid_scalar(b: &[u8; 32]) -> bool {
+    if b.iter().all(|&x| x == 0) {
+        return false;
+    }
+    // big-endian comparison b < N
+    for i in 0..32 {
+        if b[i] < SECP256K1_N[i] {
+            return true;
+        }
+        if b[i] > SECP256K1_N[i] {
+            return false;
+        }
+    }
+    false // equal to N is invalid
+}
+
+fn generate_scalar() -> [u8; 32] {
+    loop {
+        let b: [u8; 32] = rand::random();
+        if is_valid_scalar(&b) {
+            return b;
+        }
+    }
+}
+
+/// Write `text` to `path` with 0600 perms.
+pub fn write_secret(path: &Path, text: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(path, format!("{hex}\n"))?;
+    std::fs::write(path, format!("{text}\n"))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -79,21 +128,39 @@ mod tests {
     use super::*;
 
     #[test]
-    fn derivation_is_deterministic_and_separated() {
-        let m = Master { seed: [7u8; 32] };
-        assert_eq!(m.derive(CTX_IROH), m.derive(CTX_IROH), "deterministic");
-        assert_ne!(m.derive(CTX_IROH), m.derive(CTX_NOSTR), "domain-separated");
-        assert_ne!(
-            m.derive_counter(CTX_NOSTR, 0),
-            m.derive_counter(CTX_NOSTR, 1),
-            "counter varies output"
-        );
+    fn nsec_roundtrip() {
+        let root = RootKey { secret: [3u8; 32] };
+        let nsec = root.nsec().unwrap();
+        assert!(nsec.starts_with("nsec1"));
+        let back = RootKey::parse(&nsec).unwrap();
+        assert_eq!(back.secret, root.secret);
     }
 
     #[test]
-    fn different_seeds_differ() {
-        let a = Master { seed: [1u8; 32] };
-        let b = Master { seed: [2u8; 32] };
-        assert_ne!(a.derive(CTX_IROH), b.derive(CTX_IROH));
+    fn hex_also_parses() {
+        let hex = "01".repeat(32);
+        let root = RootKey::parse(&hex).unwrap();
+        assert_eq!(root.secret, [1u8; 32]);
+    }
+
+    #[test]
+    fn iroh_derivation_is_deterministic_and_one_way() {
+        let root = RootKey { secret: [9u8; 32] };
+        assert_eq!(root.derive_iroh(), root.derive_iroh());
+        assert_ne!(root.derive_iroh(), root.secret_bytes(), "iroh key != nsec");
+    }
+
+    #[test]
+    fn rejects_invalid_scalars() {
+        assert!(!is_valid_scalar(&[0u8; 32]));
+        assert!(!is_valid_scalar(&SECP256K1_N));
+        assert!(is_valid_scalar(&[1u8; 32]));
+    }
+
+    #[test]
+    fn generated_keys_are_valid() {
+        for _ in 0..100 {
+            assert!(is_valid_scalar(&generate_scalar()));
+        }
     }
 }

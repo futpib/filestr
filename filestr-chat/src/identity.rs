@@ -2,8 +2,8 @@
 //! and as the stable id of a hub member. Derived from the shared master seed
 //! (`libfilestr::keys`) so one backup covers both the iroh and nostr keys.
 
-use anyhow::{Result, anyhow};
-use libfilestr::keys::{CTX_NOSTR, Master};
+use anyhow::{Context, Result};
+use libfilestr::keys::RootKey;
 use nostr::{Keys, SecretKey};
 
 #[derive(Clone)]
@@ -12,17 +12,12 @@ pub struct Identity {
 }
 
 impl Identity {
-    /// Derive the nostr identity from the master seed. Derived bytes must be a
-    /// valid secp256k1 scalar; on the negligible chance they aren't, salt with
-    /// an incrementing counter until they are.
-    pub fn derive(master: &Master) -> Result<Self> {
-        for counter in 0..16u32 {
-            let material = master.derive_counter(CTX_NOSTR, counter);
-            if let Ok(secret) = SecretKey::from_slice(&material) {
-                return Ok(Self { keys: Keys::new(secret) });
-            }
-        }
-        Err(anyhow!("could not derive a valid nostr key from the master seed"))
+    /// Build the nostr identity from the root key — the stored nsec *is* this
+    /// secret key.
+    pub fn from_root(root: &RootKey) -> Result<Self> {
+        let secret = SecretKey::from_slice(&root.secret_bytes())
+            .context("root key is not a valid nostr secret")?;
+        Ok(Self { keys: Keys::new(secret) })
     }
 
     /// Public key as lowercase hex (the member id shown to users).

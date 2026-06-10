@@ -22,7 +22,7 @@ use iroh::protocol::Router;
 use iroh::{Endpoint, RelayMode, SecretKey};
 use iroh_blobs::store::fs::FsStore;
 use libfilestr::config::{Config, RelaySetting};
-use libfilestr::keys::Master;
+use libfilestr::keys::RootKey;
 use libfilestr::paths;
 
 use crate::p2p::FilestrProtocol;
@@ -58,7 +58,7 @@ fn init_tracing(verbose: u8) {
 /// otherwise derived from the master seed. Overriding lets a node keep a
 /// fixed endpoint identity (and the tickets that reference it) while the
 /// master seed still drives the nostr identity.
-fn load_iroh_key(data_dir: &std::path::Path, master: &Master) -> Result<SecretKey> {
+fn load_iroh_key(data_dir: &std::path::Path, root: &RootKey) -> Result<SecretKey> {
     let override_path = data_dir.join("iroh.key");
     match std::fs::read_to_string(&override_path) {
         Ok(text) => {
@@ -71,7 +71,8 @@ fn load_iroh_key(data_dir: &std::path::Path, master: &Master) -> Result<SecretKe
             Ok(SecretKey::from_bytes(&bytes))
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            Ok(SecretKey::from_bytes(&master.derive(libfilestr::keys::CTX_IROH)))
+            // derived from the nsec one-way (see libfilestr::keys)
+            Ok(SecretKey::from_bytes(&root.derive_iroh()))
         }
         Err(e) => Err(e).context("reading iroh.key"),
     }
@@ -116,9 +117,9 @@ async fn main() -> Result<()> {
     std::fs::create_dir_all(&data_dir)
         .with_context(|| format!("creating {}", data_dir.display()))?;
 
-    let master = Master::load_or_create(&data_dir.join("master.key"))
-        .context("loading master key")?;
-    let secret_key = load_iroh_key(&data_dir, &master)?;
+    let root = RootKey::load_or_create(&data_dir.join("identity.key"))
+        .context("loading identity key")?;
+    let secret_key = load_iroh_key(&data_dir, &root)?;
     let store = FsStore::load(data_dir.join("blobs")).await.context("opening blob store")?;
 
     let relay_mode = match config.relay {
@@ -143,7 +144,7 @@ async fn main() -> Result<()> {
 
     #[cfg(feature = "chat")]
     let chat_identity =
-        filestr_chat::Identity::derive(&master).context("deriving nostr identity")?;
+        filestr_chat::Identity::from_root(&root).context("building nostr identity")?;
 
     let (events, _) = tokio::sync::broadcast::channel(256);
     let state = Arc::new(State {

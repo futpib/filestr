@@ -29,16 +29,16 @@ Role 3 is the core and works **iroh-only**: peering, browse, search, and fetch r
 
 ## 2. Identities and keys
 
-A node has two keypairs, both derived **by default from a single 32-byte master seed** so one backup is the whole identity:
+The node's **root secret is its nostr identity** — a secp256k1 key stored as an `nsec`. The iroh transport key is *derived from it* one-way, so the single nsec is the whole node identity and is portable (importable into nostr clients).
 
-| key | curve | derivation | used for |
+| key | curve | source | used for |
 |---|---|---|---|
-| iroh endpoint | ed25519 | `BLAKE3-derive_key("…iroh transport key v1", seed)` | QUIC connections, grants, transfers |
-| nostr identity (chat) | secp256k1 | `BLAKE3-derive_key("…nostr identity key v1", seed)`, counter-salted retry until a valid scalar | Marmot/MLS hubs, member id |
+| nostr identity (root) | secp256k1 | stored `nsec` in `identity.key` | Marmot/MLS hubs, member id |
+| iroh endpoint | ed25519 | `BLAKE3-derive_key("…iroh transport key v1", nsec_bytes)` | QUIC connections, grants, transfers |
 
-**Storage.** The seed lives in `master.key` (hex, 0600) under the data dir, generated on first run. Nothing else is persisted — both keys are recomputed deterministically each start. Domain-separated contexts mean the two keys are independent: neither reveals the other or the seed.
+**Storage.** `identity.key` holds one `nsec1…` (also accepts raw hex), 0600, under the data dir; generated on first run (rejection-sampled to a valid secp256k1 scalar). Nothing else is persisted — the iroh key is recomputed each start. The derivation is one-way: the iroh key never reveals the nsec.
 
-**Override.** Drop a hex 32-byte `iroh.key` next to `master.key` and it takes precedence for the endpoint identity (the nostr key still comes from the seed). Use this to pin a pre-existing endpoint id — and the tickets that reference it — while the seed drives everything else.
+**Override.** Drop a hex 32-byte `iroh.key` next to `identity.key` and it takes precedence for the endpoint identity (the nsec still drives the nostr identity). Use this to pin a pre-existing endpoint id — and the tickets that reference it — while the nsec drives the rest. Conversely, to adopt an existing nostr identity, just write your `nsec` into `identity.key`.
 
 **No public discovery.** The iroh endpoint does not publish to pkarr/DNS discovery. A node's dialable `NodeAddr` (relay URL + optional direct addrs) travels only inside invites. Knowing a NodeId alone resolves to nothing.
 
