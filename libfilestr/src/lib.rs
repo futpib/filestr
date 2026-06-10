@@ -8,6 +8,7 @@
 pub mod config;
 pub mod ctl;
 pub mod grants;
+pub mod keys;
 pub mod p2p;
 pub mod paths;
 pub mod ticket;

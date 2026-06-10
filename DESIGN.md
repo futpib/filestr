@@ -27,14 +27,18 @@ Role 3 is the core and works **iroh-only**: peering, browse, search, and fetch r
 - Public/open hubs, stranger discovery, DHTs.
 - Cryptographic enforcement of social rules (share-to-join, reshare permission). These are cooperative, verified socially (§5, §7.5) — same as DC++ hub rules ever were.
 
-## 2. Identities and planes
+## 2. Identities and keys
 
-Each node has two keypairs:
+A node has two keypairs, both derived **by default from a single 32-byte master seed** so one backup is the whole identity:
 
-| | key | used for |
-|---|---|---|
-| chat plane (optional) | nostr secp256k1 | Whitenoise/MLS groups, DMs, invite transport |
-| data plane | iroh ed25519 NodeId | QUIC connections, grants, transfers |
+| key | curve | derivation | used for |
+|---|---|---|---|
+| iroh endpoint | ed25519 | `BLAKE3-derive_key("…iroh transport key v1", seed)` | QUIC connections, grants, transfers |
+| nostr identity (chat) | secp256k1 | `BLAKE3-derive_key("…nostr identity key v1", seed)`, counter-salted retry until a valid scalar | Marmot/MLS hubs, member id |
+
+**Storage.** The seed lives in `master.key` (hex, 0600) under the data dir, generated on first run. Nothing else is persisted — both keys are recomputed deterministically each start. Domain-separated contexts mean the two keys are independent: neither reveals the other or the seed.
+
+**Override.** Drop a hex 32-byte `iroh.key` next to `master.key` and it takes precedence for the endpoint identity (the nostr key still comes from the seed). Use this to pin a pre-existing endpoint id — and the tickets that reference it — while the seed drives everything else.
 
 **No public discovery.** The iroh endpoint does not publish to pkarr/DNS discovery. A node's dialable `NodeAddr` (relay URL + optional direct addrs) travels only inside invites. Knowing a NodeId alone resolves to nothing.
 

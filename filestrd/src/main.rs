@@ -22,6 +22,7 @@ use iroh::protocol::Router;
 use iroh::{Endpoint, RelayMode, SecretKey};
 use iroh_blobs::store::fs::FsStore;
 use libfilestr::config::{Config, RelaySetting};
+use libfilestr::keys::Master;
 use libfilestr::paths;
 
 use crate::p2p::FilestrProtocol;
@@ -53,30 +54,26 @@ fn init_tracing(verbose: u8) {
     tracing_subscriber::fmt().with_env_filter(filter).with_writer(std::io::stderr).init();
 }
 
-fn load_secret_key(data_dir: &std::path::Path) -> Result<SecretKey> {
-    let path = data_dir.join("secret.key");
-    match std::fs::read_to_string(&path) {
+/// The iroh transport key: a user-supplied `iroh.key` override if present,
+/// otherwise derived from the master seed. Overriding lets a node keep a
+/// fixed endpoint identity (and the tickets that reference it) while the
+/// master seed still drives the nostr identity.
+fn load_iroh_key(data_dir: &std::path::Path, master: &Master) -> Result<SecretKey> {
+    let override_path = data_dir.join("iroh.key");
+    match std::fs::read_to_string(&override_path) {
         Ok(text) => {
             let bytes = data_encoding::HEXLOWER
                 .decode(text.trim().as_bytes())
-                .context("secret.key is not valid hex")?;
+                .context("iroh.key is not valid hex")?;
             let bytes: [u8; 32] =
-                bytes.try_into().map_err(|_| anyhow::anyhow!("secret.key has wrong length"))?;
+                bytes.try_into().map_err(|_| anyhow::anyhow!("iroh.key must be 32 bytes"))?;
+            tracing::info!("using iroh.key override for endpoint identity");
             Ok(SecretKey::from_bytes(&bytes))
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            let key = SecretKey::generate();
-            let encoded = data_encoding::HEXLOWER.encode(&key.to_bytes());
-            std::fs::write(&path, format!("{encoded}\n"))?;
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
-            }
-            tracing::info!("generated new endpoint secret key");
-            Ok(key)
+            Ok(SecretKey::from_bytes(&master.derive(libfilestr::keys::CTX_IROH)))
         }
-        Err(e) => Err(e).context("reading secret.key"),
+        Err(e) => Err(e).context("reading iroh.key"),
     }
 }
 
@@ -119,7 +116,9 @@ async fn main() -> Result<()> {
     std::fs::create_dir_all(&data_dir)
         .with_context(|| format!("creating {}", data_dir.display()))?;
 
-    let secret_key = load_secret_key(&data_dir)?;
+    let master = Master::load_or_create(&data_dir.join("master.key"))
+        .context("loading master key")?;
+    let secret_key = load_iroh_key(&data_dir, &master)?;
     let store = FsStore::load(data_dir.join("blobs")).await.context("opening blob store")?;
 
     let relay_mode = match config.relay {
@@ -143,8 +142,8 @@ async fn main() -> Result<()> {
         .context("loading grants.json")?;
 
     #[cfg(feature = "chat")]
-    let chat_identity = filestr_chat::Identity::load_or_create(&data_dir.join("nostr.key"))
-        .context("loading nostr identity")?;
+    let chat_identity =
+        filestr_chat::Identity::derive(&master).context("deriving nostr identity")?;
 
     let (events, _) = tokio::sync::broadcast::channel(256);
     let state = Arc::new(State {

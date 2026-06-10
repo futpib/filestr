@@ -1,10 +1,10 @@
-//! The node's nostr identity: a secp256k1 keypair persisted to disk, used to
-//! author hub messages and as the stable id of a hub member.
+//! The node's nostr identity: a secp256k1 keypair used to author hub messages
+//! and as the stable id of a hub member. Derived from the shared master seed
+//! (`libfilestr::keys`) so one backup covers both the iroh and nostr keys.
 
-use std::path::Path;
-
-use anyhow::{Context, Result};
-use nostr::Keys;
+use anyhow::{Result, anyhow};
+use libfilestr::keys::{CTX_NOSTR, Master};
+use nostr::{Keys, SecretKey};
 
 #[derive(Clone)]
 pub struct Identity {
@@ -12,30 +12,17 @@ pub struct Identity {
 }
 
 impl Identity {
-    /// Load the identity from `path`, generating and persisting one (0600) on
-    /// first use.
-    pub fn load_or_create(path: &Path) -> Result<Self> {
-        match std::fs::read_to_string(path) {
-            Ok(text) => {
-                let keys = Keys::parse(text.trim()).context("parsing nostr identity key")?;
-                Ok(Self { keys })
+    /// Derive the nostr identity from the master seed. Derived bytes must be a
+    /// valid secp256k1 scalar; on the negligible chance they aren't, salt with
+    /// an incrementing counter until they are.
+    pub fn derive(master: &Master) -> Result<Self> {
+        for counter in 0..16u32 {
+            let material = master.derive_counter(CTX_NOSTR, counter);
+            if let Ok(secret) = SecretKey::from_slice(&material) {
+                return Ok(Self { keys: Keys::new(secret) });
             }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                let keys = Keys::generate();
-                let hex = keys.secret_key().to_secret_hex();
-                if let Some(parent) = path.parent() {
-                    std::fs::create_dir_all(parent)?;
-                }
-                std::fs::write(path, format!("{hex}\n"))?;
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-                }
-                Ok(Self { keys })
-            }
-            Err(e) => Err(e).context("reading nostr identity key"),
         }
+        Err(anyhow!("could not derive a valid nostr key from the master seed"))
     }
 
     /// Public key as lowercase hex (the member id shown to users).

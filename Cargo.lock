@@ -2894,6 +2894,8 @@ dependencies = [
 name = "libfilestr"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "blake3",
  "data-encoding",
  "dirs",
  "rand 0.10.1",
