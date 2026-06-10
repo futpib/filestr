@@ -77,6 +77,8 @@ enum Command {
         #[command(subcommand)]
         command: HubCommand,
     },
+    /// Show the per-peer reputation ledger and service decisions
+    Rep,
     /// Stream daemon events
     Listen,
     /// Stop the daemon
@@ -456,6 +458,27 @@ async fn run() -> Result<()> {
             }
         }
         Command::Hub { command } => run_hub(&mut client, cli.json, command).await?,
+        Command::Rep => {
+            let response = client.roundtrip(RequestBody::Reputation).await?;
+            let ResponseBody::Reputation { peers } = response else {
+                bail!("unexpected response");
+            };
+            if cli.json {
+                print_json(&peers);
+            } else {
+                for p in peers {
+                    let node = &p.node_id[..p.node_id.len().min(12)];
+                    println!(
+                        "{:<12} {:<6} served={:<10} received={:<10} debt={}",
+                        node,
+                        p.action,
+                        human_size(p.served),
+                        human_size(p.received),
+                        human_size(p.debt.unsigned_abs()),
+                    );
+                }
+            }
+        }
         Command::Listen => {
             let id = client.send(RequestBody::Subscribe).await?;
             loop {

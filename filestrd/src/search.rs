@@ -283,21 +283,41 @@ pub async fn fetch_source(
 ) -> Result<()> {
     let parsed: iroh_blobs::Hash = hash.parse().map_err(|e| anyhow!("bad hash {hash}: {e}"))?;
     let conn = connect(state, peer, p2p::ALPN).await?;
-    let (mut send, recv) = conn.open_bi().await.context("open_bi")?;
-    // header naming the source handle; the rest of the stream is iroh-blobs
-    send.write_all(p2p::encode(&P2pRequest::Get { handle }).as_bytes())
-        .await
-        .context("send get header")?;
+    let (mut send, mut recv) = conn.open_bi().await.context("open_bi")?;
+    // header naming the source handle + hash; the rest of the stream is iroh-blobs
+    send.write_all(
+        p2p::encode(&P2pRequest::Get { handle, hash: Some(hash.to_string()) }).as_bytes(),
+    )
+    .await
+    .context("send get header")?;
+
+    // the serving end (origin, possibly through relays) acks or denies first
+    match crate::p2p::read_line_raw(&mut recv, p2p::MAX_LINE).await? {
+        Some(line) => match serde_json::from_str::<P2pResponse>(&line) {
+            Ok(P2pResponse::GetOk) => {}
+            Ok(P2pResponse::Error { code, message }) => {
+                return Err(anyhow!("source refused ({code}): {message}"));
+            }
+            _ => return Err(anyhow!("unexpected get status: {}", line.trim())),
+        },
+        None => return Err(anyhow!("source closed before answering")),
+    }
 
     let pair = StreamPair::new(conn.stable_id() as u64, recv, send);
     let request = get_request(parsed, range);
+    let mut received = 0u64;
     let mut stream = state.store.remote().execute_get(pair, request).stream();
     while let Some(item) = stream.next().await {
         match item {
             GetProgressItem::Progress(n) => {
+                received = n;
                 let _ = progress.send(n).await;
             }
-            GetProgressItem::Done(_) => return Ok(()),
+            GetProgressItem::Done(_) => {
+                // credit the peer for the verified bytes they delivered to us
+                state.rep_record_received(&peer.node_id, received).await;
+                return Ok(());
+            }
             GetProgressItem::Error(e) => {
                 return Err(anyhow!("transfer from {} failed: {e}", peer.node_id));
             }
@@ -329,13 +349,16 @@ pub async fn serve_local(
 /// (DESIGN.md §7.3). No buffering: the client's request and the upstream's
 /// bao-verified response stream straight through, so the relay never stages
 /// the content and verification remains end-to-end.
+/// Returns the number of bytes relayed downstream to the client (for
+/// reputation accounting of the relay's usefulness).
 pub async fn relay_get(
     state: &State,
     peer_node_id: &str,
     upstream_handle: String,
+    hash: Option<String>,
     mut client_recv: iroh::endpoint::RecvStream,
     mut client_send: iroh::endpoint::SendStream,
-) -> Result<()> {
+) -> Result<u64> {
     let peer = {
         let grants = state.grants.lock().await;
         grants
@@ -349,7 +372,9 @@ pub async fn relay_get(
     let conn = connect(state, &peer, p2p::ALPN).await?;
     let (mut up_send, mut up_recv) = conn.open_bi().await.context("open_bi to upstream")?;
     up_send
-        .write_all(p2p::encode(&P2pRequest::Get { handle: Some(upstream_handle) }).as_bytes())
+        .write_all(
+            p2p::encode(&P2pRequest::Get { handle: Some(upstream_handle), hash }).as_bytes(),
+        )
         .await
         .context("forward get header")?;
 
@@ -360,12 +385,12 @@ pub async fn relay_get(
         let _ = tokio::io::copy(&mut client_recv, &mut up_send).await;
         let _ = up_send.finish();
     });
-    // upstream -> client (the bao-verified payload)
+    // upstream -> client (the status line + bao-verified payload, verbatim)
     let down = tokio::io::copy(&mut up_recv, &mut client_send).await;
     let _ = client_send.finish();
     let _ = up.await;
-    down.context("relaying payload")?;
-    Ok(())
+    let bytes = down.context("relaying payload")?;
+    Ok(bytes)
 }
 
 /// Make a fresh query id for locally-originated searches.

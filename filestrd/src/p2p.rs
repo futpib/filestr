@@ -17,7 +17,7 @@ use crate::state::{HandleTarget, State};
 /// Read one `\n`-terminated line directly from the stream without buffering
 /// past the newline, so the remainder is pristine for the iroh-blobs protocol
 /// that may follow on the same stream. Returns `None` at clean EOF.
-async fn read_line_raw(recv: &mut RecvStream, max: usize) -> anyhow::Result<Option<String>> {
+pub(crate) async fn read_line_raw(recv: &mut RecvStream, max: usize) -> anyhow::Result<Option<String>> {
     let mut buf = Vec::new();
     let mut byte = [0u8; 1];
     loop {
@@ -84,6 +84,15 @@ impl ProtocolHandler for FilestrProtocol {
 async fn write_response(send: &mut SendStream, resp: &P2pResponse) -> anyhow::Result<()> {
     send.write_all(p2p::encode(resp).as_bytes()).await?;
     Ok(())
+}
+
+/// Complete-blob size for reputation accounting, or None if we don't hold it.
+async fn blob_size(state: &State, hash: &str) -> Option<u64> {
+    let parsed: iroh_blobs::Hash = hash.parse().ok()?;
+    match state.store.blobs().status(parsed).await.ok()? {
+        iroh_blobs::api::proto::BlobStatus::Complete { size } => Some(size),
+        _ => None,
+    }
 }
 
 async fn handle_stream(
@@ -212,18 +221,50 @@ async fn handle_stream(
                 P2pRequest::Search { query_id, ttl, query } => {
                     handle_search(&state, &grant.view, &mut send, query_id, ttl, query).await?;
                 }
-                P2pRequest::Get { handle } => {
-                    // serve from our store, or splice through to the upstream
-                    // the handle points at — no buffering either way (§7.3)
+                P2pRequest::Get { handle, hash } => {
+                    // reputation gate: refuse content to a peer that's free-riding
+                    // past its credit limit (cheap requests like search still pass)
+                    if state.rep_action(&node_id).await
+                        == libfilestr::reputation::ServiceAction::Deny
+                    {
+                        write_response(
+                            &mut send,
+                            &P2pResponse::Error {
+                                code: code::RATE_LIMITED.into(),
+                                message: "over your credit limit — reciprocate to resume".into(),
+                            },
+                        )
+                        .await?;
+                        send.finish().ok();
+                        state.emit("serve_denied", serde_json::json!({ "node_id": node_id }));
+                        return Ok(());
+                    }
+                    // serve from our store, or splice through to the upstream the
+                    // handle points at — no buffering either way (§7.3)
                     let target = match &handle {
                         Some(h) => state.handles.lock().await.resolve(h),
                         None => None,
                     };
                     return match target {
                         Some(HandleTarget::Remote { peer, upstream }) => {
-                            search::relay_get(&state, &peer, upstream, recv, send).await
+                            // origin sends the GetOk; we just splice and bill the
+                            // downstream peer for the bytes we relayed to them
+                            let served =
+                                search::relay_get(&state, &peer, upstream, hash, recv, send).await?;
+                            state.rep_record_served(&node_id, served).await;
+                            Ok(())
                         }
-                        _ => search::serve_local(&state, conn_id, recv, send).await,
+                        _ => {
+                            write_response(&mut send, &P2pResponse::GetOk).await?;
+                            search::serve_local(&state, conn_id, recv, send).await?;
+                            // bill the full blob size (server-known, ungameable)
+                            if let Some(h) = &hash
+                                && let Some(size) = blob_size(&state, h).await
+                            {
+                                state.rep_record_served(&node_id, size).await;
+                            }
+                            Ok(())
+                        }
                     };
                 }
                 P2pRequest::Nostr => {

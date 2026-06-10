@@ -159,6 +159,10 @@ async fn main() -> Result<()> {
             .context("loading grants.json")?
     };
 
+    let rep_path = state_dir.join("reputation.json");
+    let rep_store = libfilestr::reputation::RepStore::load_or_default(&rep_path)
+        .context("loading reputation.json")?;
+
     #[cfg(feature = "chat")]
     let chat_identity =
         filestr_chat::Identity::from_root(&root).context("building nostr identity")?;
@@ -175,6 +179,10 @@ async fn main() -> Result<()> {
         seen_queries: tokio::sync::Mutex::new(Default::default()),
         recent_sources: tokio::sync::Mutex::new(Default::default()),
         transfers: tokio::sync::Mutex::new(Default::default()),
+        reputation: tokio::sync::Mutex::new(crate::state::RepState {
+            store: rep_store,
+            path: rep_path,
+        }),
         #[cfg(feature = "chat")]
         chat: crate::chat::ChatState::new(chat_identity),
         events,

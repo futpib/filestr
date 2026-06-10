@@ -11,6 +11,7 @@ pub mod grants;
 pub mod keys;
 pub mod p2p;
 pub mod paths;
+pub mod reputation;
 pub mod ticket;
 
 /// Crate version, reported in `status` and `hello`.

@@ -28,6 +28,7 @@ pub struct State {
     pub seen_queries: tokio::sync::Mutex<SeenQueries>,
     pub recent_sources: tokio::sync::Mutex<RecentSources>,
     pub transfers: tokio::sync::Mutex<crate::transfers::Transfers>,
+    pub reputation: tokio::sync::Mutex<RepState>,
     #[cfg(feature = "chat")]
     pub chat: crate::chat::ChatState,
     pub events: tokio::sync::broadcast::Sender<Event>,
@@ -37,6 +38,53 @@ pub struct State {
 impl State {
     pub fn emit(&self, event_type: &str, payload: serde_json::Value) {
         let _ = self.events.send(Event { event_type: event_type.to_string(), payload });
+    }
+
+    /// Resolve the effective reputation policy for a peer (config + the peer's
+    /// grant label for override matching).
+    async fn rep_policy(&self, node_id: &str) -> libfilestr::reputation::Policy {
+        let label = {
+            let grants = self.grants.lock().await;
+            grants.grants.active_for(node_id).and_then(|g| g.label.clone())
+        };
+        self.config.read().await.reputation_policy(node_id, label.as_deref())
+    }
+
+    /// Decide whether to serve content to a peer right now.
+    pub async fn rep_action(&self, node_id: &str) -> libfilestr::reputation::ServiceAction {
+        let policy = self.rep_policy(node_id).await;
+        let stats = self.reputation.lock().await.store.stats(node_id, policy.half_life_secs);
+        libfilestr::reputation::decide(Some(&stats), &policy)
+    }
+
+    pub async fn rep_record_served(&self, node_id: &str, bytes: u64) {
+        let hl = self.rep_policy(node_id).await.half_life_secs;
+        let mut rep = self.reputation.lock().await;
+        rep.store.record_served(node_id, bytes, hl);
+        if let Err(e) = rep.save() {
+            tracing::warn!("saving reputation: {e}");
+        }
+    }
+
+    pub async fn rep_record_received(&self, node_id: &str, bytes: u64) {
+        let hl = self.rep_policy(node_id).await.half_life_secs;
+        let mut rep = self.reputation.lock().await;
+        rep.store.record_received(node_id, bytes, hl);
+        if let Err(e) = rep.save() {
+            tracing::warn!("saving reputation: {e}");
+        }
+    }
+}
+
+/// Reputation ledger plus its on-disk location.
+pub struct RepState {
+    pub store: libfilestr::reputation::RepStore,
+    pub path: PathBuf,
+}
+
+impl RepState {
+    pub fn save(&self) -> std::io::Result<()> {
+        self.store.save(&self.path)
     }
 }
 

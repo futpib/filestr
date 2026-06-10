@@ -32,6 +32,8 @@ pub mod code {
     pub const NOT_FOUND: &str = "not_found";
     pub const BAD_REQUEST: &str = "bad_request";
     pub const INTERNAL: &str = "internal";
+    /// Refused for free-riding past the credit limit (DESIGN.md §9 reputation).
+    pub const RATE_LIMITED: &str = "rate_limited";
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -54,6 +56,10 @@ pub enum P2pRequest {
     Get {
         #[serde(default)]
         handle: Option<String>,
+        /// Content hash being fetched. Lets the server pre-check availability
+        /// and account served bytes (and is forwarded by relays).
+        #[serde(default)]
+        hash: Option<String>,
     },
     /// nostr-over-iroh tunnel (DESIGN.md §8.2): the rest of the stream is a
     /// NIP-01 relay session. Answered with `unsupported` when the chat feature
@@ -91,6 +97,9 @@ pub enum P2pResponse {
         handle: String,
     },
     SearchDone,
+    /// Sent on a `Get` stream just before the bao transfer to signal the
+    /// server accepted; denial uses `Error` (e.g. code `rate_limited`).
+    GetOk,
     /// Reply to a `Hub` request (opaque; chat feature defines the payload).
     HubReply { payload: String },
     Error { code: String, message: String },

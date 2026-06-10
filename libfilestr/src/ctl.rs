@@ -112,6 +112,8 @@ pub enum RequestBody {
     HubLog {
         hub: String,
     },
+    /// Per-peer reputation ledger and the resulting service decision.
+    Reputation,
     Subscribe,
     Shutdown,
 }
@@ -143,6 +145,7 @@ pub enum ResponseBody {
     HubMembers { members: Vec<String> },
     HubSent,
     HubMessages { messages: Vec<ChatMessage> },
+    Reputation { peers: Vec<PeerReputation> },
     Subscribed,
     Event { event: Event },
     ShuttingDown,
@@ -247,6 +250,19 @@ pub struct ChatMessage {
     pub author: String,
     pub content: String,
     pub created_at: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PeerReputation {
+    pub node_id: String,
+    /// Bytes we've served them (decayed).
+    pub served: u64,
+    /// Bytes they've served us (decayed).
+    pub received: u64,
+    /// served − received; positive means they owe us.
+    pub debt: i64,
+    /// Current service decision: "serve" or "deny".
+    pub action: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

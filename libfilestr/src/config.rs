@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::reputation::{OverLimit, Policy};
+
 /// Name of the implicit view containing every share root.
 pub const VIEW_FULL: &str = "full";
 
@@ -22,11 +24,92 @@ pub struct Config {
     pub reshare: ReshareConfig,
     pub search: SearchConfig,
     pub invite: InviteConfig,
+    pub reputation: ReputationConfig,
     /// Shared directories. Each root has a unique name used by views.
     pub share: Vec<ShareRoot>,
     /// Named views: view name -> list of share root names. The view "full"
     /// (all roots) always exists implicitly.
     pub view: BTreeMap<String, Vec<String>>,
+}
+
+/// Reputation/anti-free-riding policy: a global default plus per-peer
+/// overrides matched by node-id prefix or grant label.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ReputationConfig {
+    pub enabled: bool,
+    pub credit_limit_mib: u64,
+    pub newcomer_budget_mib: u64,
+    pub half_life_days: u64,
+    pub over_limit: OverLimit,
+    /// Per-peer overrides; the first whose `peer` matches wins.
+    #[serde(rename = "override")]
+    pub overrides: Vec<ReputationOverride>,
+}
+
+impl Default for ReputationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            credit_limit_mib: 256,
+            newcomer_budget_mib: 64,
+            half_life_days: 7,
+            over_limit: OverLimit::Deny,
+            overrides: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct ReputationOverride {
+    /// Node-id prefix or grant label this override applies to.
+    pub peer: String,
+    pub enabled: Option<bool>,
+    pub credit_limit_mib: Option<u64>,
+    pub newcomer_budget_mib: Option<u64>,
+    pub half_life_days: Option<u64>,
+    pub over_limit: Option<OverLimit>,
+}
+
+impl ReputationConfig {
+    fn base_policy(&self) -> Policy {
+        Policy {
+            enabled: self.enabled,
+            credit_limit: self.credit_limit_mib * 1024 * 1024,
+            newcomer_budget: self.newcomer_budget_mib * 1024 * 1024,
+            half_life_secs: self.half_life_days * 24 * 3600,
+            over_limit: self.over_limit,
+        }
+    }
+}
+
+impl Config {
+    /// Resolve the effective reputation policy for a peer (base config with the
+    /// first matching per-peer override applied).
+    pub fn reputation_policy(&self, node_id: &str, label: Option<&str>) -> Policy {
+        let mut policy = self.reputation.base_policy();
+        if let Some(o) = self.reputation.overrides.iter().find(|o| {
+            !o.peer.is_empty() && (node_id.starts_with(&o.peer) || label == Some(o.peer.as_str()))
+        }) {
+            if let Some(v) = o.enabled {
+                policy.enabled = v;
+            }
+            if let Some(v) = o.credit_limit_mib {
+                policy.credit_limit = v * 1024 * 1024;
+            }
+            if let Some(v) = o.newcomer_budget_mib {
+                policy.newcomer_budget = v * 1024 * 1024;
+            }
+            if let Some(v) = o.half_life_days {
+                policy.half_life_secs = v * 24 * 3600;
+            }
+            if let Some(v) = o.over_limit {
+                policy.over_limit = v;
+            }
+        }
+        policy
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]

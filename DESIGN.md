@@ -217,6 +217,23 @@ The `hub` request is a small control RPC (opaque to the wire layer; the `chat` f
 
 Setting `reshare.* = false` everywhere degrades gracefully to a pure pairwise F2F sharer; the reshare layer is purely additive.
 
+### 9.1 Reputation / anti-free-riding (implemented)
+
+Each edge of the grant graph is a repeated game. Since BLAKE3 makes content corruption impossible and the invite system makes identity costly, the only residual cheat is **free-riding** — taking bytes without giving. We counter it with a **local, first-hand reciprocity ledger**: per direct neighbour we track decaying counters of verified bytes *served to* vs *received from* them (delivery is provable, so the ledger is tamper-evident at each edge). A peer whose debt (`served − received`) exceeds a credit limit is **denied content** until they reciprocate — search/browse, being cheap, still go through.
+
+Game-theoretic shape: a **credit limit** tolerates the naturally lumpy/asymmetric interest in content (a friend who hosts a lot and downloads little is a *creditor*, served more, not penalised); a **newcomer budget** is the optimistic-unchoke that lets cooperation bootstrap; an exponential **half-life decay** means neither grudges nor goodwill are permanent. Relay work counts as serving the *downstream* neighbour, so resharing builds standing and stays incentivised. Reputation is deliberately **never global** — it can't be (attribution-hiding hides origins) and that also denies any slander/Sybil-reputation surface; your own first-hand bytes are the only input.
+
+| setting | scope | default |
+|---|---|---|
+| `reputation.enabled` | node | `true` |
+| `reputation.credit_limit_mib` — debt tolerated before denial | node | 256 |
+| `reputation.newcomer_budget_mib` — bootstrap allowance | node | 64 |
+| `reputation.half_life_days` — counter decay | node | 7 |
+| `reputation.over_limit` — `deny` or `serve` (off) | node | `deny` |
+| `[[reputation.override]]` keyed by node-id prefix or grant label | per-peer | — |
+
+Per-peer overrides let you, say, give a trusted friend an effectively unlimited credit limit or exempt them entirely (`over_limit = "serve"`), or tighten a flaky peer. `filestrctl rep` shows the ledger and each peer's current decision. (Throttle and search-only responses, and friend-of-friend vouching for bootstrapping, are designed extensions — see §13.)
+
 ## 10. Threat model
 
 **Prevented**
@@ -224,6 +241,7 @@ Setting `reshare.* = false` everywhere degrades gracefully to a pure pairwise F2
 - Hub members seeing your files via mere co-membership.
 - Search/result receivers learning *which node* exposed a result (attribution-hiding).
 - Relays (iroh or filestr peers) tampering with content (BLAKE3 e2e verification).
+- Free-riding: a peer that only takes is cut off past its credit limit (§9.1).
 
 **Not prevented (out of scope)**
 - iroh/nostr relays observing IPs and connection metadata.
@@ -260,6 +278,11 @@ Setting `reshare.* = false` everywhere degrades gracefully to a pure pairwise F2
   still clipped exactly.
 - Relays do **not** cache pass-through content (streaming, §7.3); optional
   swarm-thickening cache is future work.
+- **Reputation (§9.1)** charges a local serve by the *full* blob size (a
+  ranged fetch is billed the whole blob — conservative, can't be gamed down);
+  relayed serves are billed exact bytes. Only the `served > limit` → deny lever
+  is wired; throttle/search-only and quality signals (promise-keeping, stall
+  rate) are designed but not yet enforced.
 - **Chat (§4):** MLS state uses `mdk-memory-storage`, so hubs are lost on
   daemon restart; `mdk-sqlite-storage` is a drop-in for persistence. The hub
   owner is the sole relay host (no member↔member federation yet), and MLS
@@ -271,3 +294,4 @@ Setting `reshare.* = false` everywhere degrades gracefully to a pure pairwise F2
 2. Handle lifetime / refresh under long multi-source fetches.
 3. Parallel multi-source range-splitting and optional relay caching, and how a cache interacts with `allow_reshare = false` upstream.
 4. File-list format: flat table vs DC++-style directory tree (affects browse UX only).
+5. Reputation extensions (§9.1): throttle/search-only responses instead of hard deny; quality signals (advertised-hit delivery rate, stall/abort rate) folded into the score; positive-only friend-of-friend vouching (per-hop discounted, never overriding first-hand data) to bootstrap trust in newcomers.

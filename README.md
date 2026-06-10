@@ -57,6 +57,7 @@ filestrctl get <hash> -b -o big.iso       # background; returns a transfer id
 filestrctl transfers                      # watch active/queued/done downloads
 
 filestrctl status                         # also: peer ls, invite ls, listen
+filestrctl rep                            # per-peer reciprocity ledger + verdict
 
 # chat: nostr/MLS hubs (needs a chat-enabled daemon, the default build)
 filestrctl hub create general             # owner: create a hub you own

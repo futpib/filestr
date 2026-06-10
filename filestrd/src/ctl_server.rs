@@ -129,6 +129,7 @@ async fn handle_simple(state: &Arc<State>, body: RequestBody) -> ResponseBody {
         RequestBody::Browse { peer } => handle_browse(state, peer).await,
         RequestBody::Transfers => handle_transfers(state).await,
         RequestBody::TransferCancel { id } => handle_transfer_cancel(state, id).await,
+        RequestBody::Reputation => handle_reputation(state).await,
         RequestBody::HubCreate { name } => handle_hub_create(state, name).await,
         RequestBody::HubInvite { hub } => handle_hub_invite(state, hub).await,
         RequestBody::HubJoin { ticket } => handle_hub_join(state, ticket).await,
@@ -528,6 +529,31 @@ async fn handle_transfer_cancel(state: &Arc<State>, id: u64) -> Result<ResponseB
     } else {
         Err(anyhow!("no transfer with id {id}"))
     }
+}
+
+async fn handle_reputation(state: &Arc<State>) -> Result<ResponseBody> {
+    // longest half-life across config so decay is shown consistently
+    let half_life = {
+        let config = state.config.read().await;
+        config.reputation.half_life_days * 24 * 3600
+    };
+    let entries = state.reputation.lock().await.store.all(half_life);
+    let mut peers = Vec::with_capacity(entries.len());
+    for (node_id, stats) in entries {
+        let action = state.rep_action(&node_id).await;
+        peers.push(libfilestr::ctl::PeerReputation {
+            node_id,
+            served: stats.served as u64,
+            received: stats.received as u64,
+            debt: stats.debt() as i64,
+            action: match action {
+                libfilestr::reputation::ServiceAction::Serve => "serve",
+                libfilestr::reputation::ServiceAction::Deny => "deny",
+            }
+            .to_string(),
+        });
+    }
+    Ok(ResponseBody::Reputation { peers })
 }
 
 // --- hub handlers (feature-gated; without `chat` they report unsupported) ---

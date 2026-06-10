@@ -44,8 +44,11 @@ data_dir = "$dir/data"
 relay = "disabled"
 $share_toml
 EOF
+    # optional extra TOML for this node (e.g. a [reputation] block)
+    [ -n "${EXTRA_CONFIG:-}" ] && printf '%s\n' "$EXTRA_CONFIG" >> "$dir/config.toml"
     "$BIN/filestrd" --config "$dir/config.toml" -vv 2> "$dir/daemon.log" &
     PIDS+=($!)
+    declare -g "PID_${name}=$!"   # so tests can SIGHUP a specific node
     local i
     for i in $(seq 1 100); do
         if "$BIN/filestrctl" --socket "$dir/ctl.sock" status > /dev/null 2>&1; then
