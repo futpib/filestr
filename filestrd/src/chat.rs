@@ -218,8 +218,41 @@ pub async fn invite(state: &Arc<State>, hub: String) -> Result<String> {
     Ok(ticket.encode())
 }
 
-pub async fn join(state: &Arc<State>, ticket_str: String) -> Result<HubInfo> {
+/// Join a hub from its ticket. Returns the hub info and whether the MLS join
+/// was *queued* (chat disabled) rather than completed now.
+pub async fn join(state: &Arc<State>, ticket_str: String) -> Result<(HubInfo, bool)> {
     let ticket = HubTicket::parse(&ticket_str)?;
+
+    // file-peering half — symmetric redeem; works with or without chat
+    ctl_server::redeem_ticket(state, ticket.invite.clone(), Some(format!("hub:{}", ticket.name)))
+        .await
+        .context("redeeming hub invite")?;
+
+    // chat off → queue the MLS join for when it's enabled
+    if state.chat().is_err() {
+        let mut pending = state.pending_hubs.lock().await;
+        if !pending.tickets.contains(&ticket_str) {
+            pending.tickets.push(ticket_str);
+            pending.save();
+        }
+        state.emit("hub_join_queued", serde_json::json!({ "group_ref": ticket.group_ref }));
+        let info = HubInfo {
+            group_ref: ticket.group_ref,
+            name: ticket.name,
+            owner: false,
+            members: 0,
+        };
+        return Ok((info, true));
+    }
+
+    let info = complete_hub_join(state, &ticket).await?;
+    Ok((info, false))
+}
+
+/// The MLS half of joining: ask the owner to add us and process the welcome.
+/// Assumes the ticket's invite has already been redeemed (so the owner allows
+/// us). Used both by `join` and to drain the pending queue.
+async fn complete_hub_join(state: &Arc<State>, ticket: &HubTicket) -> Result<HubInfo> {
     let owner_peer = PeerIn {
         node_id: ticket.invite.id.clone(),
         label: Some(format!("hub:{}", ticket.name)),
@@ -228,44 +261,58 @@ pub async fn join(state: &Arc<State>, ticket_str: String) -> Result<HubInfo> {
         allow_reshare: false,
         added_at: libfilestr::unix_now(),
     };
-
-    // 1. redeem the owner's invite. Symmetric: both sides now allow each other
-    //    and record each other as peers (share-to-join falls out of this).
-    ctl_server::redeem_ticket(state, ticket.invite.clone(), Some(format!("hub:{}", ticket.name)))
-        .await
-        .context("redeeming hub invite")?;
-
-    // 2. our MLS key package.
     let relays = hub_relays(state).await;
     let key_package = {
         let mls = state.chat()?.mls.lock().unwrap();
         mls.key_package_event(&relays)?.as_json()
     };
-
-    // 3. ask the owner to admit us.
     let rpc = HubRpc::Join { group_ref: ticket.group_ref.clone(), key_package };
-    let reply = hub_rpc(state, &owner_peer, &rpc).await?;
-    let welcome_json = match reply {
+    let welcome_json = match hub_rpc(state, &owner_peer, &rpc).await? {
         HubRpcReply::Welcome { welcome } => welcome,
         HubRpcReply::Error { message } => return Err(anyhow!("owner refused join: {message}")),
         HubRpcReply::Ok => return Err(anyhow!("owner returned no welcome")),
     };
-
-    // 4. join the MLS group from the welcome.
     let welcome: UnsignedEvent =
         UnsignedEvent::from_json(welcome_json.as_bytes()).context("parse welcome")?;
     let group_ref = {
         let mls = state.chat()?.mls.lock().unwrap();
         mls.join_from_welcome(&welcome)?
     };
-
-    let record = HubRecord { name: ticket.name, owner: false, owner_peer: Some(owner_peer) };
+    let record =
+        HubRecord { name: ticket.name.clone(), owner: false, owner_peer: Some(owner_peer) };
     let members = members_count(state.chat()?, &group_ref);
     let info = hub_info(&record, &group_ref, members);
     state.chat()?.hubs.lock().await.insert(group_ref.clone(), record);
     state.chat()?.save_hubs().await;
     state.emit("hub_joined", serde_json::json!({ "group_ref": group_ref }));
     Ok(info)
+}
+
+/// Drain hub joins queued while chat was disabled (called at startup once chat
+/// is enabled). Successful joins are removed from the queue; failures stay for
+/// next time.
+pub async fn process_pending_hubs(state: &Arc<State>) {
+    let tickets = { state.pending_hubs.lock().await.tickets.clone() };
+    for ticket_str in tickets {
+        let done = match HubTicket::parse(&ticket_str) {
+            Ok(ticket) => match complete_hub_join(state, &ticket).await {
+                Ok(_) => true,
+                Err(e) => {
+                    tracing::warn!("pending hub join failed (will retry): {e:#}");
+                    false
+                }
+            },
+            Err(e) => {
+                tracing::warn!("dropping unparseable pending hub ticket: {e}");
+                true
+            }
+        };
+        if done {
+            let mut pending = state.pending_hubs.lock().await;
+            pending.tickets.retain(|t| t != &ticket_str);
+            pending.save();
+        }
+    }
 }
 
 /// Member side: produce a self-contained join-request ticket (`filestrreq1…`)

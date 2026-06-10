@@ -215,6 +215,10 @@ async fn main() -> Result<()> {
         }),
         #[cfg(feature = "chat")]
         chat: chat_state,
+        #[cfg(feature = "chat")]
+        pending_hubs: tokio::sync::Mutex::new(crate::state::PendingHubs::load_or_default(
+            state_dir.join("pending_hubs.json"),
+        )),
         events,
         shutdown: tokio_util::sync::CancellationToken::new(),
     });
@@ -231,6 +235,9 @@ async fn main() -> Result<()> {
     if state.chat.is_some() {
         crate::chat::spawn_relay_listener(state.clone()).await;
         crate::chat::spawn_dm_listener(state.clone()).await;
+        // finish any hub joins queued while chat was disabled
+        let s = state.clone();
+        tokio::spawn(async move { crate::chat::process_pending_hubs(&s).await });
     }
 
     let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;

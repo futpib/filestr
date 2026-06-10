@@ -33,6 +33,10 @@ pub struct State {
     /// peers files with no nostr).
     #[cfg(feature = "chat")]
     pub chat: Option<crate::chat::ChatState>,
+    /// Hub tickets whose file-peering half was redeemed while chat was off; the
+    /// MLS join completes when chat is enabled. Present regardless of `enabled`.
+    #[cfg(feature = "chat")]
+    pub pending_hubs: tokio::sync::Mutex<PendingHubs>,
     pub events: tokio::sync::broadcast::Sender<Event>,
     pub shutdown: tokio_util::sync::CancellationToken,
 }
@@ -82,6 +86,32 @@ impl State {
         rep.store.record_received(node_id, bytes, hl);
         if let Err(e) = rep.save() {
             tracing::warn!("saving reputation: {e}");
+        }
+    }
+}
+
+/// Hub tickets queued for an MLS join once chat is enabled (their file-peering
+/// half was already redeemed). Persisted so a restart doesn't lose them.
+#[cfg(feature = "chat")]
+#[derive(Default)]
+pub struct PendingHubs {
+    pub tickets: Vec<String>,
+    pub path: PathBuf,
+}
+
+#[cfg(feature = "chat")]
+impl PendingHubs {
+    pub fn load_or_default(path: PathBuf) -> Self {
+        let tickets = std::fs::read(&path)
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default();
+        Self { tickets, path }
+    }
+
+    pub fn save(&self) {
+        if let Ok(bytes) = serde_json::to_vec_pretty(&self.tickets) {
+            let _ = std::fs::write(&self.path, bytes);
         }
     }
 }

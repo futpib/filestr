@@ -14,7 +14,7 @@ Role 3 is the core and works **iroh-only**: peering, browse, search, and fetch r
 
 The chat plane is optional **at compile time** (the `chat` cargo feature, default on; `--no-default-features` builds a pure iroh-only binary) *and* **at runtime** (`[chat] enabled`, default true). A default binary with `enabled = false` runs and peers files with no nostr at all — no identity activation, no MLS store, no relays, no listeners; hub commands return "chat disabled." Flip it on and restart to join hubs later. So a node can pair and share files first and opt into chat whenever.
 
-**Ticket / nostr independence.** The plain invite (`filestr1…`) is fully nostr-independent — it works in an iroh-only build or with chat disabled. The hub tickets (`filestrhub1…`, `filestrreq1…`) and the hub address (`filestraddr1…`) are chat constructs; their embedded *file* invite still peers without nostr, but completing the hub (MLS) join needs the chat plane on.
+**Ticket / nostr independence.** The plain invite (`filestr1…`) is fully nostr-independent — it works in an iroh-only build or with chat disabled. The hub tickets (`filestrhub1…`, `filestrreq1…`) and the hub address (`filestraddr1…`) are chat constructs; their embedded *file* invite still peers without nostr, but completing the hub (MLS) join needs the chat plane on. Redeeming a hub ticket while chat is off peers files immediately and **queues** the MLS join, which completes automatically when chat is enabled. See [TICKETS.md](TICKETS.md) for a full per-ticket reference.
 
 ### Goals
 

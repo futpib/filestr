@@ -162,7 +162,7 @@ pub enum ResponseBody {
     TransferCancelled { id: u64 },
     HubCreated { hub: HubInfo },
     HubInvite { ticket: String },
-    HubJoined { hub: HubInfo },
+    HubJoined { hub: HubInfo, queued: bool },
     HubRequestTicket { ticket: String, sent: bool },
     HubAdmitted { hub: HubInfo },
     HubAddress { address: String },

@@ -28,8 +28,9 @@ Both planes are implemented and covered by e2e tests.
   (share-to-join). Built behind the `chat` cargo feature (default on);
   `--no-default-features` gives a pure iroh-only build.
 
-See [DESIGN.md](DESIGN.md) for the protocol and [PLAN.md](PLAN.md) for the
-roadmap.
+See [DESIGN.md](DESIGN.md) for the protocol, [TICKETS.md](TICKETS.md) for the
+ticket/address reference, and [PLAN.md](PLAN.md) / [ROADMAP.md](ROADMAP.md)
+for the roadmap.
 
 ## Quickstart
 

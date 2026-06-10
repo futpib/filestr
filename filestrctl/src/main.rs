@@ -545,9 +545,16 @@ async fn run_hub(client: &mut Client, json: bool, command: HubCommand) -> Result
         }
         HubCommand::Join { ticket } => {
             let response = client.roundtrip(RequestBody::HubJoin { ticket }).await?;
-            let ResponseBody::HubJoined { hub } = response else { bail!("unexpected response") };
+            let ResponseBody::HubJoined { hub, queued } = response else {
+                bail!("unexpected response")
+            };
             if json {
-                print_json(&hub);
+                print_json(&serde_json::json!({ "hub": hub, "queued": queued }));
+            } else if queued {
+                println!(
+                    "peered with {} ({}); chat is off — hub join queued, enable [chat] and restart",
+                    hub.name, hub.group_ref
+                );
             } else {
                 println!("joined hub {} ({})", hub.name, hub.group_ref);
             }

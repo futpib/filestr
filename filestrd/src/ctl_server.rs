@@ -581,7 +581,8 @@ async fn handle_hub_invite(state: &Arc<State>, hub: String) -> Result<ResponseBo
 }
 #[cfg(feature = "chat")]
 async fn handle_hub_join(state: &Arc<State>, ticket: String) -> Result<ResponseBody> {
-    Ok(ResponseBody::HubJoined { hub: crate::chat::join(state, ticket).await? })
+    let (hub, queued) = crate::chat::join(state, ticket).await?;
+    Ok(ResponseBody::HubJoined { hub, queued })
 }
 #[cfg(feature = "chat")]
 async fn handle_hub_request(
