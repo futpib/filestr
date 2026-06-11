@@ -92,7 +92,8 @@ fn load_iroh_key(data_dir: &std::path::Path, root: &RootKey) -> Result<SecretKey
 /// on success. Returns the file count. On any error the old state is untouched.
 pub(crate) async fn reload_config(state: &Arc<State>) -> Result<usize> {
     let config = Config::load_or_default(&state.config_path)?;
-    let new_index = index::scan(&config, &state.store, &state.thumbs_dir).await?;
+    let prev = state.index.read().await.clone();
+    let new_index = index::scan(&config, &state.store, &state.thumbs_dir, &prev).await?;
     let files = new_index.files.len();
     *state.index.write().await = new_index;
     *state.config.write().await = config;
@@ -182,7 +183,7 @@ async fn main() -> Result<()> {
     let endpoint = builder.bind().await.context("binding iroh endpoint")?;
     tracing::info!(endpoint_id = %endpoint.id(), "endpoint bound");
 
-    let initial_index = index::scan(&config, &store, &thumbs_dir).await?;
+    let initial_index = index::scan(&config, &store, &thumbs_dir, &index::Index::default()).await?;
 
     let grants_path = state_dir.join("grants.json");
     // adopt grants from the pre-split location (data dir) if present

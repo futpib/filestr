@@ -488,7 +488,8 @@ fn write_config_atomic(config_path: &std::path::Path, contents: &str) -> Result<
 
 async fn handle_rescan(state: &Arc<State>) -> Result<ResponseBody> {
     let config = state.config.read().await.clone();
-    let new_index = index::scan(&config, &state.store, &state.thumbs_dir).await?;
+    let prev = state.index.read().await.clone();
+    let new_index = index::scan(&config, &state.store, &state.thumbs_dir, &prev).await?;
     let files = new_index.files.len();
     *state.index.write().await = new_index;
     state.emit("rescanned", serde_json::json!({ "files": files }));

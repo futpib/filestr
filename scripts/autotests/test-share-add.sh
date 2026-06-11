@@ -36,6 +36,14 @@ if fctl A share add "$TESTDIR/media" > /dev/null 2>&1; then
     die "duplicate share name should have failed"
 fi
 
+# incremental scan must still detect changes, not serve a stale cached entry:
+# growing a file re-indexes it on rescan
+BEFORE="$(fctl A --json share ls | jq '[.shares[] | select(.name=="documents") | .bytes][0]')"
+head -c 4096 /dev/urandom >> "$TESTDIR/docs/readme.txt"
+fctl A rescan > /dev/null
+AFTER="$(fctl A --json share ls | jq '[.shares[] | select(.name=="documents") | .bytes][0]')"
+[ "$AFTER" -gt "$BEFORE" ] || die "rescan missed a changed file (before=$BEFORE after=$AFTER)"
+
 # remove one; it disappears from the listing and the config file
 fctl A share rm media > /dev/null
 fctl A --json share ls | jq -e 'all(.shares[]; .name != "media")' > /dev/null \

@@ -17,13 +17,16 @@ pub struct IndexedFile {
     /// `<root name>/<relative path>`, the path peers see.
     pub path: String,
     pub size: u64,
+    /// File mtime (seconds since the epoch); 0 if unavailable. Used with `size`
+    /// to skip re-hashing unchanged files on a rescan.
+    pub mtime: u64,
     pub hash: String,
     /// Media metadata (duration/tags), extracted at scan time. Empty for
     /// non-media or unreadable files.
     pub media: MediaMeta,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Index {
     pub files: Vec<IndexedFile>,
 }
@@ -78,11 +81,24 @@ impl Index {
     }
 }
 
-/// Walk all share roots and (re)import into the blob store. Reference import
-/// means unchanged files are re-hashed but not copied; the share stays on
-/// disk where it is.
-pub async fn scan(config: &Config, store: &FsStore, thumbs_dir: &std::path::Path) -> Result<Index> {
+/// Walk all share roots and (re)import into the blob store, reusing the hash and
+/// metadata of any file whose path, size and mtime are unchanged since `prev`.
+/// Reference import means changed/new files are hashed but not copied; the share
+/// stays on disk where it is. Hashing + metadata probing is the expensive part,
+/// so skipping unchanged files keeps a rescan (and `share add`) cheap on a large
+/// library — only genuinely new/changed files are touched.
+pub async fn scan(
+    config: &Config,
+    store: &FsStore,
+    thumbs_dir: &std::path::Path,
+    prev: &Index,
+) -> Result<Index> {
+    // visible path -> previously indexed file, for the unchanged-file fast path
+    let prev_by_path: HashMap<&str, &IndexedFile> =
+        prev.files.iter().map(|f| (f.path.as_str(), f)).collect();
+
     let mut files = Vec::new();
+    let mut reused = 0usize;
     for root in &config.share {
         let base = libfilestr::paths::expand_path(&root.path);
         if !base.is_dir() {
@@ -105,7 +121,36 @@ pub async fn scan(config: &Config, store: &FsStore, thumbs_dir: &std::path::Path
                 Ok(rel) => rel.to_string_lossy().replace('\\', "/"),
                 Err(_) => continue,
             };
-            let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+            let path = format!("{}/{}", root.name, rel);
+            let meta = entry.metadata().ok();
+            let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+            let mtime = meta
+                .as_ref()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+
+            // Fast path: an unchanged file (same path/size/mtime) keeps its hash
+            // and metadata — no re-hash, no re-probe. The blob and thumbnail are
+            // already in the store/cache from the previous scan.
+            if mtime != 0 {
+                if let Some(p) = prev_by_path.get(path.as_str()) {
+                    if p.size == size && p.mtime == mtime {
+                        files.push(IndexedFile {
+                            root: root.name.clone(),
+                            path,
+                            size,
+                            mtime,
+                            hash: p.hash.clone(),
+                            media: p.media.clone(),
+                        });
+                        reused += 1;
+                        continue;
+                    }
+                }
+            }
+
             let tag = store
                 .blobs()
                 .add_path_with_opts(AddPathOptions {
@@ -131,13 +176,14 @@ pub async fn scan(config: &Config, store: &FsStore, thumbs_dir: &std::path::Path
             }
             files.push(IndexedFile {
                 root: root.name.clone(),
-                path: format!("{}/{}", root.name, rel),
+                path,
                 size,
+                mtime,
                 hash,
                 media: probed.meta,
             });
         }
     }
-    tracing::info!(files = files.len(), "share scan complete");
+    tracing::info!(files = files.len(), reused, "share scan complete");
     Ok(Index { files })
 }
