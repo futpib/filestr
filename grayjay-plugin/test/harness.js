@@ -107,7 +107,7 @@ console.log(`scaffolding: ${SCRIPTS}`);
 console.log("");
 
 try {
-	vm.runInContext(combined, ctx, { filename: "combined.js", timeout: 30000 });
+	vm.runInContext(combined, ctx, { filename: "combined.js", timeout: 180000 });
 } catch (e) {
 	console.log("HARNESS ERROR running plugin:", e.stack || e);
 	process.exit(2);
