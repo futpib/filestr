@@ -45,6 +45,9 @@ struct FileItem {
     size: u64,
     /// "local" or a peer label / short node id — informational only.
     source: String,
+    /// Media metadata (duration/tags); omitted entirely when empty.
+    #[serde(skip_serializing_if = "libfilestr::ctl::MediaMeta::is_empty")]
+    media: libfilestr::ctl::MediaMeta,
 }
 
 /// Run the gateway until the process exits.
@@ -143,6 +146,7 @@ async fn list_files(state: &Arc<State>, is_head: bool) -> Result<Response<Body>>
                 hash: e.hash,
                 size: e.size,
                 source: "local".into(),
+                media: e.media,
             });
         }
     }
@@ -174,6 +178,7 @@ async fn list_files(state: &Arc<State>, is_head: bool) -> Result<Response<Body>>
                 hash: e.hash,
                 size: e.size,
                 source: label.clone(),
+                media: e.media,
             });
         }
     }

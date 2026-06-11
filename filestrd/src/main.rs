@@ -9,6 +9,7 @@ mod ctl_server;
 #[cfg(feature = "grayjay")]
 mod http_bridge;
 mod index;
+mod metadata;
 mod p2p;
 mod search;
 mod state;

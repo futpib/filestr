@@ -235,11 +235,34 @@ pub struct ViewInfo {
     pub roots: Vec<String>,
 }
 
+/// Optional media metadata for a file, extracted at index time. All fields are
+/// optional and skipped when absent, so this is forward/backward compatible on
+/// the p2p browse wire (an older peer simply omits them).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct MediaMeta {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_secs: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artist: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub album: Option<String>,
+}
+
+impl MediaMeta {
+    pub fn is_empty(&self) -> bool {
+        *self == MediaMeta::default()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileEntry {
     pub path: String,
     pub size: u64,
     pub hash: String,
+    #[serde(default, skip_serializing_if = "MediaMeta::is_empty")]
+    pub media: MediaMeta,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

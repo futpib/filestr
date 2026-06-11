@@ -9,7 +9,7 @@ use iroh_blobs::api::blobs::AddPathOptions;
 use iroh_blobs::api::proto::ImportMode;
 use iroh_blobs::store::fs::FsStore;
 use libfilestr::config::Config;
-use libfilestr::ctl::FileEntry;
+use libfilestr::ctl::{FileEntry, MediaMeta};
 
 #[derive(Debug, Clone)]
 pub struct IndexedFile {
@@ -18,6 +18,9 @@ pub struct IndexedFile {
     pub path: String,
     pub size: u64,
     pub hash: String,
+    /// Media metadata (duration/tags), extracted at scan time. Empty for
+    /// non-media or unreadable files.
+    pub media: MediaMeta,
 }
 
 #[derive(Debug, Default)]
@@ -30,7 +33,12 @@ impl Index {
         self.files
             .iter()
             .filter(|f| roots.contains(&f.root))
-            .map(|f| FileEntry { path: f.path.clone(), size: f.size, hash: f.hash.clone() })
+            .map(|f| FileEntry {
+                path: f.path.clone(),
+                size: f.size,
+                hash: f.hash.clone(),
+                media: f.media.clone(),
+            })
             .collect()
     }
 
@@ -99,11 +107,20 @@ pub async fn scan(config: &Config, store: &FsStore) -> Result<Index> {
                 })
                 .await
                 .with_context(|| format!("importing {}", abs.display()))?;
+            // Probe media metadata off the async runtime (it does blocking file
+            // IO). Best-effort: failures yield empty metadata.
+            let media = {
+                let p = abs.clone();
+                tokio::task::spawn_blocking(move || crate::metadata::probe(&p))
+                    .await
+                    .unwrap_or_default()
+            };
             files.push(IndexedFile {
                 root: root.name.clone(),
                 path: format!("{}/{}", root.name, rel),
                 size,
                 hash: tag.hash.to_hex().to_string(),
+                media,
             });
         }
     }

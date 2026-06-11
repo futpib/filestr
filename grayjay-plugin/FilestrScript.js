@@ -72,8 +72,10 @@ source.getContentDetails = function (url) {
 	} catch (e) {
 		// gateway may be momentarily unavailable; build from the URL instead
 	}
-	const display = item ? baseName(item.name) : name || hash;
+	const display = item ? displayName(item) : name || hash;
 	const sourceLabel = item ? item.source : "filestr";
+	const dur = item ? durationOf(item) : 0;
+	const fileName = item ? item.name : display;
 
 	return new PlatformVideoDetails({
 		id: new PlatformID(PLATFORM, hash, PLUGIN_ID),
@@ -81,17 +83,17 @@ source.getContentDetails = function (url) {
 		thumbnails: new Thumbnails([]),
 		author: authorOf(sourceLabel),
 		datetime: nowSeconds(),
-		duration: 0,
+		duration: dur,
 		viewCount: -1,
-		url: contentUrl(hash, item ? item.name : display),
+		url: contentUrl(hash, fileName),
 		isLive: false,
-		description: item ? `${humanSize(item.size)} · source: ${item.source}` : "",
+		description: item ? describe(item) : "",
 		video: new VideoSourceDescriptor([
 			new VideoUrlSource({
 				name: "filestr",
-				url: contentUrl(hash, item ? item.name : display),
-				container: containerOf(display),
-				duration: 0,
+				url: contentUrl(hash, fileName),
+				container: containerOf(fileName),
+				duration: dur,
 				width: 0,
 				height: 0,
 			}),
@@ -121,7 +123,12 @@ function listVideos(query, mimeClasses) {
 	if (query) {
 		const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
 		files = files.filter((f) => {
-			const hay = f.name.toLowerCase();
+			// match what the user actually sees: filename plus the tag metadata
+			const m = f.media || {};
+			const hay = [f.name, m.title, m.artist, m.album]
+				.filter(Boolean)
+				.join(" ")
+				.toLowerCase();
 			return terms.every((t) => hay.indexOf(t) !== -1);
 		});
 	}
@@ -131,15 +138,31 @@ function listVideos(query, mimeClasses) {
 function fileToVideo(f) {
 	return new PlatformVideo({
 		id: new PlatformID(PLATFORM, f.hash, PLUGIN_ID),
-		name: baseName(f.name),
+		name: displayName(f),
 		thumbnails: new Thumbnails([]),
 		author: authorOf(f.source),
 		datetime: nowSeconds(),
-		duration: 0,
+		duration: durationOf(f),
 		viewCount: -1,
 		url: contentUrl(f.hash, f.name),
 		isLive: false,
 	});
+}
+
+// Prefer the embedded tag title (optionally "Artist — Title") over the raw
+// filename, so the feed reads like a library, not a directory listing.
+function displayName(f) {
+	const m = f.media || {};
+	if (m.title) {
+		return m.artist ? `${m.artist} — ${m.title}` : m.title;
+	}
+	return baseName(f.name);
+}
+
+// Whole-second duration for Grayjay's UI (0 when unknown).
+function durationOf(f) {
+	const d = f.media && f.media.duration_secs;
+	return typeof d === "number" && d > 0 ? Math.round(d) : 0;
 }
 
 function authorOf(sourceLabel) {
@@ -207,6 +230,17 @@ function containerOf(name) {
 		default:
 			return "application/octet-stream";
 	}
+}
+
+// One-line description: tag info (artist/album), then size and provenance.
+function describe(f) {
+	const m = f.media || {};
+	const parts = [];
+	if (m.artist) parts.push(m.artist);
+	if (m.album) parts.push(m.album);
+	parts.push(humanSize(f.size));
+	parts.push(`source: ${f.source}`);
+	return parts.join(" · ");
 }
 
 function humanSize(n) {

@@ -46,24 +46,28 @@ peer file re-fetches windows (the partial blob isn't reused across requests
 unless the whole blob completes). True pipe-through (peer → client as bytes
 verify, with store reuse) is a later refinement.
 
-## 2. The feed is filenames and blank tiles
+## 2. The feed is filenames and blank tiles  *(partly done)*
 
-Everything that makes a library browsable is absent:
-
-- **Duration is always 0** — `PlatformVideo` / `PlatformVideoDetails` and the
-  `VideoUrlSource` hardcode `duration: 0`. No track lengths, no total on the
-  seek bar.
-- **No thumbnails / album art / poster frames** — `Thumbnails([])` everywhere;
-  the Home feed is a wall of identical blank tiles.
-- **Titles are raw filenames** — `baseName(f.name)`; ID3 / container tags
-  (artist, title, album) are ignored, so it's "Carefree.mp3", not
-  "Carefree — Kevin MacLeod".
+- ~~**Duration is always 0**~~ — **done.** Extracted at index time and shown on
+  the tile and player (whole-second `duration`). Audio via `symphonia` (frame
+  count × timebase); mp4-family video via the `mp4` container header. (MP3s with
+  no Xing/Info header still report no duration — a small remaining gap.)
+- ~~**Titles are raw filenames**~~ — **done.** ID3 / Vorbis / mp4 tags are read,
+  and the feed shows `Artist — Title` (falling back to the filename). Search now
+  matches the tag fields too, so what's shown is findable.
+- **No thumbnails / album art / poster frames** — still `Thumbnails([])`
+  everywhere; the Home feed is a wall of identical blank tiles. This is the
+  remaining half of #2 → see **#3**.
 - **Dates are fake** — `datetime: nowSeconds()`, so everything is "just now",
   sort-by-date is meaningless, and items reshuffle on each fetch.
 
-**Fix:** extract metadata at index time (audio: `symphonia`; video: MP4/Matroska
-box parse) and surface it in `/files`; add a `/thumb/{hash}` endpoint and
-album-art passthrough.
+How it works: `filestrd/src/metadata.rs` probes each file during the index scan
+(off the async runtime, best-effort — failures yield empty metadata); the
+fields ride on `MediaMeta`, which is attached to `IndexedFile`, the `FileEntry`
+browse wire (so peer files carry metadata too), and the gateway's `/files`.
+
+Remaining: thumbnails / album art (#3), Matroska/WebM duration, and real
+dates.
 
 ## 3. HTTP correctness players rely on
 
@@ -108,8 +112,8 @@ album-art passthrough.
 | # | Item | Effort | Notes |
 |---|---|---|---|
 | 1 | ~~`HEAD` + `ETag`/`If-Range`~~ | low | **done** — self-contained; unblocks pickier players + revalidation |
-| 2 | Duration + tag-based titles in the index, surfaced in `/files` | med | biggest *visible* feed upgrade; audio easy, video needs a box parse |
-| 3 | Thumbnail / album-art endpoint | med | turns the blank wall into a real library |
+| 2 | ~~Duration + tag-based titles in the index, surfaced in `/files`~~ | med | **done** (audio + mp4 video duration; thumbnails split to #3) |
+| 3 | Thumbnail / album-art endpoint | med | **next** — turns the blank wall into a real library |
 | 4 | ~~Ranged peer fetch (true streaming)~~ | high | **done** — windowed peer fetch; open-ended ranges start without staging the whole file |
 | 5 | Cache the peer-browse + paginate | med | robustness/scale for real libraries |
 
@@ -132,3 +136,5 @@ daemons on localhost; run via `run-all.sh`):
 - `test-grayjay-plugin.sh` — runs the plugin's own JS harness against a live
   gateway: media-only listing (a `.txt` is hidden), audio/video filter, and
   range-streamed playback through the plugin's URLs.
+- `test-media-metadata.sh` — a tagged MP3 and an MP4 (ffmpeg fixtures) surface
+  their title/artist/album and duration through `/files`. Covers **#2**.
