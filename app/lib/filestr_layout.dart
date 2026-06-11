@@ -31,7 +31,11 @@ class FilestrLayout {
         'XDG_DATA_HOME': '${paths.filesDir}/data',
         'XDG_STATE_HOME': '${paths.filesDir}/state',
         'XDG_CACHE_HOME': paths.cacheDir,
-        'RUST_LOG': 'info',
+        // Keep filestr's own startup milestones at info, but hold iroh to
+        // warnings: at global info it floods the log with net_report/relay
+        // chatter that buries "control socket ready" and friends, making the
+        // log useless for diagnosing a failed start.
+        'RUST_LOG': 'filestrd=info,libfilestr=info,iroh=warn',
       };
 
   /// Write the daemon config (chat off — the bundled binary has no chat at

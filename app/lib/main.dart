@@ -20,6 +20,11 @@ void main() {
   runApp(const FilestrApp());
 }
 
+/// Strip ANSI SGR (colour) escape sequences so daemon log output is legible in
+/// a plain text widget.
+final _ansiRe = RegExp(r'\x1B\[[0-9;]*m');
+String stripAnsi(String s) => s.replaceAll(_ansiRe, '');
+
 class FilestrApp extends StatelessWidget {
   const FilestrApp({super.key});
 
@@ -71,21 +76,55 @@ class _BootState extends State<Boot> {
   @override
   Widget build(BuildContext context) {
     if (_error != null) {
+      // The error may carry the daemon's log tail (after a blank line). Split
+      // the human reason from the log, and strip ANSI colour escapes so the log
+      // is legible in a plain Text widget.
+      final full = stripAnsi('$_error');
+      final sep = full.indexOf('\n\n');
+      final reason = sep == -1 ? full : full.substring(0, sep);
+      final log = sep == -1 ? '' : full.substring(sep + 2).trim();
       return Scaffold(
-        body: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(24),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(Icons.error_outline, size: 48),
+        appBar: AppBar(title: const Text('filestr')),
+        body: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Icon(Icons.error_outline, size: 48),
+              const SizedBox(height: 12),
+              Text('Could not start the daemon', textAlign: TextAlign.center,
+                  style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(height: 8),
+              Text(reason, textAlign: TextAlign.center),
+              if (log.isNotEmpty) ...[
                 const SizedBox(height: 16),
-                Text('Could not start the daemon:\n$_error',
-                    textAlign: TextAlign.center),
-                const SizedBox(height: 16),
-                FilledButton(onPressed: _boot, child: const Text('Retry')),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text('daemon log',
+                      style: Theme.of(context).textTheme.labelMedium),
+                ),
+                const SizedBox(height: 4),
+                Expanded(
+                  child: Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: SingleChildScrollView(
+                      child: SelectableText(
+                        log,
+                        style: const TextStyle(
+                            fontFamily: 'monospace', fontSize: 11, height: 1.3),
+                      ),
+                    ),
+                  ),
+                ),
               ],
-            ),
+              const SizedBox(height: 16),
+              FilledButton(onPressed: _boot, child: const Text('Retry')),
+            ],
           ),
         ),
       );

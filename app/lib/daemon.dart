@@ -75,9 +75,15 @@ class Daemon {
     return daemon;
   }
 
+  // How long to wait for the daemon to bring up its control socket. A real
+  // device cold-starting the service isolate (and the user dismissing the
+  // notification-permission dialog) can take well over ten seconds, so give it
+  // a generous window before declaring failure.
+  static const _connectAttempts = 300; // 300 * 100ms = 30s
+
   Future<ControlClient> _connectWithRetry() async {
     Object? lastErr;
-    for (var i = 0; i < 150; i++) {
+    for (var i = 0; i < _connectAttempts; i++) {
       if (await File(socketPath).exists()) {
         try {
           return await ControlClient.connect(socketPath);
@@ -91,7 +97,7 @@ class Daemon {
     var tail = '';
     try {
       final lines = await File(layout.logPath).readAsLines();
-      tail = lines.length > 12 ? lines.sublist(lines.length - 12).join('\n') : lines.join('\n');
+      tail = lines.length > 40 ? lines.sublist(lines.length - 40).join('\n') : lines.join('\n');
     } catch (_) {}
     throw ControlException(
         'daemon did not come up: ${lastErr ?? 'socket never appeared'}'

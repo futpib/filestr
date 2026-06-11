@@ -53,7 +53,13 @@ fn init_tracing(verbose: u8) {
     };
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(default));
-    tracing_subscriber::fmt().with_env_filter(filter).with_writer(std::io::stderr).init();
+    // stderr is captured to a log file (e.g. by the Android service), not a
+    // TTY — emit plain text, not ANSI colour escapes, so the log stays readable.
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .with_ansi(false)
+        .init();
 }
 
 /// The iroh transport key: a user-supplied `iroh.key` override if present,
