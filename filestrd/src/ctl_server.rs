@@ -20,7 +20,6 @@ use tokio::net::UnixListener;
 use tokio::net::unix::OwnedWriteHalf;
 use tokio::sync::mpsc;
 
-use crate::index;
 use crate::search::{self as search_mod, HitSource, Requester};
 use crate::state::{SourceRef, State};
 use crate::transfers;
@@ -499,12 +498,8 @@ fn write_config_atomic(config_path: &std::path::Path, contents: &str) -> Result<
 }
 
 async fn handle_rescan(state: &Arc<State>) -> Result<ResponseBody> {
-    let config = state.config.read().await.clone();
-    let prev = state.index.read().await.clone();
-    let new_index = index::scan(&config, &state.store, &state.thumbs_dir, &prev).await?;
-    let files = new_index.files.len();
-    *state.index.write().await = new_index;
-    state.emit("rescanned", serde_json::json!({ "files": files }));
+    // rescan_now reuses the in-memory index and persists the refreshed cache.
+    let files = crate::rescan_now(state).await?;
     Ok(ResponseBody::Rescanned { files })
 }
 

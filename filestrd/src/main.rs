@@ -102,6 +102,7 @@ pub(crate) async fn rescan_now(state: &Arc<State>) -> Result<usize> {
     let config = state.config.read().await.clone();
     let prev = state.index.read().await.clone();
     let new_index = index::scan(&config, &state.store, &state.thumbs_dir, &prev).await?;
+    new_index.save(&state.index_path);
     let files = new_index.files.len();
     *state.index.write().await = new_index;
     state.emit("reloaded", serde_json::json!({ "files": files }));
@@ -177,6 +178,9 @@ async fn run(args: Args, blob_rt: tokio::runtime::Handle) -> Result<()> {
     // Regenerable cache of cover-art thumbnails, keyed by content hash.
     let thumbs_dir = cache_dir.join("thumbs");
     std::fs::create_dir_all(&thumbs_dir).context("creating thumbs dir")?;
+    // Persisted index cache: lets the startup scan reuse unchanged files instead
+    // of re-hashing the whole library on every restart.
+    let index_path = cache_dir.join("index.bin");
 
     let relay_mode = if !config.relay_urls.is_empty() {
         // self-hosted / custom iroh relays take precedence over the preset
@@ -218,7 +222,11 @@ async fn run(args: Args, blob_rt: tokio::runtime::Handle) -> Result<()> {
     let endpoint = builder.bind().await.context("binding iroh endpoint")?;
     tracing::info!(endpoint_id = %endpoint.id(), "endpoint bound");
 
-    let initial_index = index::scan(&config, &store, &thumbs_dir, &index::Index::default()).await?;
+    // Reuse the persisted cache so unchanged files aren't re-hashed on restart.
+    let cached = index::Index::load(&index_path);
+    tracing::debug!(cached_files = cached.files.len(), "loaded index cache");
+    let initial_index = index::scan(&config, &store, &thumbs_dir, &cached).await?;
+    initial_index.save(&index_path);
 
     let grants_path = state_dir.join("grants.json");
     // adopt grants from the pre-split location (data dir) if present
@@ -268,6 +276,7 @@ async fn run(args: Args, blob_rt: tokio::runtime::Handle) -> Result<()> {
         endpoint: endpoint.clone(),
         store: store.clone(),
         thumbs_dir,
+        index_path,
         index: tokio::sync::RwLock::new(initial_index),
         handles: tokio::sync::Mutex::new(Default::default()),
         seen_queries: tokio::sync::Mutex::new(Default::default()),

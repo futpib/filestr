@@ -252,13 +252,17 @@ pub struct ViewInfo {
 /// the p2p browse wire (an older peer simply omits them).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct MediaMeta {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    // No per-field skip_serializing_if: it would break postcard (a
+    // non-self-describing format that reads fields positionally) when this is
+    // persisted in the index cache. The whole `media` field is still omitted
+    // when empty by the container's `skip_serializing_if = MediaMeta::is_empty`.
+    #[serde(default)]
     pub duration_secs: Option<f64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub title: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub artist: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub album: Option<String>,
 }
 

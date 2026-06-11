@@ -1364,6 +1364,7 @@ dependencies = [
  "mp4",
  "n0-error",
  "nostr",
+ "postcard",
  "rand 0.10.1",
  "serde",
  "serde_json",

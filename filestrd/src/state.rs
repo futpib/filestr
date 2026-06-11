@@ -25,6 +25,9 @@ pub struct State {
     pub store: FsStore,
     /// Directory holding cached thumbnails (cover art), keyed by content hash.
     pub thumbs_dir: PathBuf,
+    /// Persisted index cache (path → hash + metadata) so a restart skips
+    /// re-hashing unchanged files.
+    pub index_path: PathBuf,
     pub index: tokio::sync::RwLock<Index>,
     pub handles: tokio::sync::Mutex<Handles>,
     pub seen_queries: tokio::sync::Mutex<SeenQueries>,

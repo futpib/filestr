@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
+use serde::{Deserialize, Serialize};
 use iroh_blobs::BlobFormat;
 use iroh_blobs::api::blobs::AddPathOptions;
 use iroh_blobs::api::proto::ImportMode;
@@ -11,7 +12,7 @@ use iroh_blobs::store::fs::FsStore;
 use libfilestr::config::Config;
 use libfilestr::ctl::{FileEntry, MediaMeta};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexedFile {
     pub root: String,
     /// `<root name>/<relative path>`, the path peers see.
@@ -31,7 +32,42 @@ pub struct Index {
     pub files: Vec<IndexedFile>,
 }
 
+/// Bump when the on-disk `IndexedFile` layout changes, to invalidate old caches.
+const INDEX_CACHE_VERSION: u32 = 1;
+
 impl Index {
+    /// Load the persisted index cache (best-effort): a content-keyed cache of
+    /// path → hash + metadata so a restart can skip re-hashing unchanged files.
+    /// Any read/parse error (missing, corrupt, version bump) yields an empty
+    /// index, which just means a full rescan.
+    pub fn load(path: &std::path::Path) -> Index {
+        let Ok(bytes) = std::fs::read(path) else {
+            return Index::default();
+        };
+        match postcard::from_bytes::<(u32, Vec<IndexedFile>)>(&bytes) {
+            Ok((INDEX_CACHE_VERSION, files)) => Index { files },
+            _ => Index::default(),
+        }
+    }
+
+    /// Persist the index cache via a temp file + rename. Best-effort: a failure
+    /// is logged and ignored (the cache is regenerable by rescanning).
+    pub fn save(&self, path: &std::path::Path) {
+        let bytes = match postcard::to_allocvec(&(INDEX_CACHE_VERSION, &self.files)) {
+            Ok(b) => b,
+            Err(e) => {
+                tracing::warn!("serializing index cache: {e}");
+                return;
+            }
+        };
+        let mut tmp = path.as_os_str().to_owned();
+        tmp.push(".tmp");
+        let tmp = std::path::PathBuf::from(tmp);
+        if let Err(e) = std::fs::write(&tmp, &bytes).and_then(|_| std::fs::rename(&tmp, path)) {
+            tracing::warn!("writing index cache {}: {e}", path.display());
+        }
+    }
+
     pub fn entries(&self, roots: &[String]) -> Vec<FileEntry> {
         self.files
             .iter()
