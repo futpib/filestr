@@ -31,15 +31,37 @@ Grayjay (plugin)  ──HTTP/localhost──►  filestr app's [http] gateway
 - `FilestrScript.js` — the plugin script.
 - `test/harness.js` — a Node test harness (see below).
 
-## Use it in Grayjay
+## Use it in Grayjay (plug and play)
 
-1. Run the filestr app (it starts the gateway on `127.0.0.1:11780`).
-2. In Grayjay: enable Developer Mode, start the DevServer, and load this
-   plugin's `FilestrConfig.json` (serve this folder over HTTP, e.g.
-   `npx serve`, and point the DevServer at the config URL), then Inject Plugin.
-   See `grayjay-android/plugin-development.md`.
-3. The filestr source appears under Sources; its Home feed is everything the
-   filestr node can serve.
+The filestr daemon **serves this plugin itself** from its gateway, so there's no
+separate web server or DevServer:
+
+- `GET /grayjay/FilestrConfig.json` — config (its URLs are rewritten to the
+  gateway's actual host:port at request time)
+- `GET /grayjay/FilestrScript.js`, `GET /grayjay/filestr.png`
+
+So you just point Grayjay at `http://127.0.0.1:11780/grayjay/FilestrConfig.json`.
+The **Android app has an "Add to Grayjay" button** that does this in one tap
+(it fires a VIEW intent at Grayjay's `AddSourceActivity` — see below).
+
+The filestr source then appears under Sources; its Home feed is everything the
+filestr node can serve, and opening an item plays it.
+
+### Why a button (and not Grayjay's "Install by URL")
+
+Grayjay's in-app **Install by URL only accepts `https://`** (or a
+`grayjay://plugin/…` deep link) — a plain `http://127.0.0.1` URL is rejected
+("not a plugin url"). But Grayjay's exported `AddSourceActivity` *does* accept an
+`http` URL via a `VIEW` intent, so the app launches that directly:
+
+```
+Intent(ACTION_VIEW, "http://127.0.0.1:11780/grayjay/FilestrConfig.json")
+  .setClassName("com.futo.platformplayer",
+                "com.futo.platformplayer.activities.AddSourceActivity")
+```
+
+The plugin is unsigned (self-served), so Grayjay shows a "Missing Signature"
+warning on install — tap "Install Anyway".
 
 ## Test
 

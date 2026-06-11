@@ -59,8 +59,12 @@ fvm flutter build apk --debug
 
 The generated config enables the daemon's loopback HTTP gateway
 (`[http] listen = "127.0.0.1:11780"`), so other apps on the device can list and
-stream whatever this node serves. A [Grayjay](https://grayjay.app/) source
-plugin that uses it lives in [`../grayjay-plugin/`](../grayjay-plugin).
+stream whatever this node serves. The daemon also **serves the
+[Grayjay](https://grayjay.app/) plugin itself** at `/grayjay/…`, and the Status
+screen has an **"Add to Grayjay"** button that opens Grayjay's install flow for
+it in one tap (fires a VIEW intent at Grayjay's `AddSourceActivity`, since
+Grayjay's own "Install by URL" rejects `http://localhost`). See
+[`../grayjay-plugin/`](../grayjay-plugin).
 
 ## Storage
 

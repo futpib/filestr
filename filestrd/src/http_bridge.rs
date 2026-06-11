@@ -81,6 +81,15 @@ async fn route(state: Arc<State>, req: Request<hyper::body::Incoming>) -> Result
     if path == "/" || path == "/files" {
         return list_files(&state).await;
     }
+    if path.starts_with("/grayjay") {
+        let host = req
+            .headers()
+            .get(header::HOST)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("127.0.0.1")
+            .to_string();
+        return serve_grayjay(&path, &host);
+    }
     if let Some(hash) = path.strip_prefix("/file/") {
         let range = req.headers().get(header::RANGE).and_then(|v| v.to_str().ok()).map(String::from);
         let name = req
@@ -155,6 +164,44 @@ async fn list_files(state: &Arc<State>) -> Result<Response<Body>> {
         .header(header::CONTENT_TYPE, "application/json")
         .header("access-control-allow-origin", "*")
         .body(full(json))?)
+}
+
+// The Grayjay source plugin, embedded so the daemon is self-contained: a
+// device can add the source straight from this gateway
+// (http://127.0.0.1:11780/grayjay/FilestrConfig.json) with no extra server.
+const GRAYJAY_CONFIG: &str = include_str!("../../grayjay-plugin/FilestrConfig.json");
+const GRAYJAY_SCRIPT: &str = include_str!("../../grayjay-plugin/FilestrScript.js");
+const GRAYJAY_ICON: &[u8] = include_bytes!("../../grayjay-plugin/filestr.png");
+
+/// Serve the bundled Grayjay plugin. The config's URLs are rewritten to absolute
+/// URLs against the request's Host, so it works on whatever address/port the
+/// gateway is reached at.
+fn serve_grayjay(path: &str, host: &str) -> Result<Response<Body>> {
+    let base = format!("http://{host}/grayjay");
+    match path {
+        "/grayjay/FilestrConfig.json" | "/grayjay" | "/grayjay/" => {
+            let mut cfg: serde_json::Value = serde_json::from_str(GRAYJAY_CONFIG)?;
+            cfg["sourceUrl"] = format!("{base}/FilestrConfig.json").into();
+            cfg["scriptUrl"] = format!("{base}/FilestrScript.js").into();
+            cfg["iconUrl"] = format!("{base}/filestr.png").into();
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/json")
+                .header("access-control-allow-origin", "*")
+                .body(full(serde_json::to_vec(&cfg)?))?)
+        }
+        "/grayjay/FilestrScript.js" => Ok(Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "application/javascript")
+            .header("access-control-allow-origin", "*")
+            .body(full(GRAYJAY_SCRIPT))?),
+        "/grayjay/filestr.png" => Ok(Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "image/png")
+            .header("access-control-allow-origin", "*")
+            .body(full(GRAYJAY_ICON))?),
+        _ => Ok(text(StatusCode::NOT_FOUND, "not found".into())),
+    }
 }
 
 async fn browse_peer(state: &Arc<State>, node_id: &str) -> Result<Vec<FileEntry>> {

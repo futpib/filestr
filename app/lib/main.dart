@@ -11,6 +11,7 @@ import 'package:flutter_foreground_task/flutter_foreground_task.dart';
 
 import 'control_client.dart';
 import 'daemon.dart';
+import 'native_bridge.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -196,6 +197,14 @@ class _StatusPageState extends State<StatusPage> {
     }
   }
 
+  Future<void> _addToGrayjay() async {
+    final ok = await NativeBridge.openInGrayjay(widget.daemon.grayjayUrl);
+    if (!ok) {
+      Clipboard.setData(ClipboardData(text: widget.daemon.grayjayUrl));
+      _snack('Grayjay not found — copied the plugin URL instead');
+    }
+  }
+
   void _snack(String m) {
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(m)));
@@ -238,7 +247,23 @@ class _StatusPageState extends State<StatusPage> {
             icon: const Icon(Icons.refresh),
             label: const Text('Rescan shared folder'),
           ),
-          const SizedBox(height: 24),
+          const SizedBox(height: 16),
+          FilledButton.icon(
+            onPressed: _addToGrayjay,
+            icon: const Icon(Icons.play_circle_outline),
+            label: const Text('Add to Grayjay'),
+          ),
+          const SizedBox(height: 4),
+          Center(
+            child: TextButton(
+              onPressed: () {
+                Clipboard.setData(ClipboardData(text: widget.daemon.grayjayUrl));
+                _snack('Copied plugin URL');
+              },
+              child: const Text('Copy plugin URL'),
+            ),
+          ),
+          const SizedBox(height: 12),
           Text('Shared folder:\n${widget.daemon.shareDir}',
               style: Theme.of(context).textTheme.bodySmall),
           const SizedBox(height: 8),

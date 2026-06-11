@@ -22,6 +22,10 @@ class Daemon {
   String get shareDir => layout.shareDir;
   String get downloadsDir => layout.downloadsDir;
 
+  /// URL to add this node as a source in Grayjay (on this device).
+  String get grayjayUrl =>
+      'http://127.0.0.1:${FilestrLayout.httpPort}/grayjay/FilestrConfig.json';
+
   ControlClient get client {
     final c = _client;
     if (c == null) throw StateError('not connected');

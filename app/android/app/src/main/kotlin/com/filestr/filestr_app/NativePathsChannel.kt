@@ -1,6 +1,8 @@
 package com.filestr.filestr_app
 
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import io.flutter.plugin.common.BinaryMessenger
 import io.flutter.plugin.common.MethodChannel
 
@@ -26,6 +28,25 @@ object NativePathsChannel {
                         "cacheDir" to appContext.cacheDir.absolutePath,
                     )
                 )
+                // Open Grayjay's Add Source flow on our plugin config URL. Grayjay's
+                // own "Install by URL" dialog rejects http://localhost, but its
+                // exported AddSourceActivity accepts a VIEW intent with the URL.
+                "openInGrayjay" -> {
+                    val url = call.argument<String>("url")
+                    try {
+                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                            setClassName(
+                                "com.futo.platformplayer",
+                                "com.futo.platformplayer.activities.AddSourceActivity"
+                            )
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        appContext.startActivity(intent)
+                        result.success(true)
+                    } catch (e: Exception) {
+                        result.success(false)
+                    }
+                }
                 else -> result.notImplemented()
             }
         }

@@ -35,4 +35,10 @@ class NativeBridge {
       cacheDir: m['cacheDir']!,
     );
   }
+
+  /// Launch Grayjay's Add Source flow for [url]. Returns false if Grayjay
+  /// isn't installed (or the intent failed).
+  static Future<bool> openInGrayjay(String url) async {
+    return await _channel.invokeMethod<bool>('openInGrayjay', {'url': url}) ?? false;
+  }
 }
