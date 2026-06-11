@@ -277,22 +277,13 @@ async fn serve_file(
             .body(empty())?);
     }
 
-    // Resolve the size. A HEAD must not trigger a transfer — answer from what we
-    // already know (local store / index / a recent browse). A GET fetches the
-    // blob into the local store first, as before.
-    let size = if is_head {
-        match known_size(state, parsed, hash).await {
-            Some(s) => s,
-            None => return Ok(text(StatusCode::NOT_FOUND, "unknown hash".into())),
-        }
-    } else {
-        if let Err(e) = transfers::ensure_local(state, hash).await {
-            return Ok(text(StatusCode::NOT_FOUND, format!("{e:#}")));
-        }
-        match state.store.blobs().status(parsed).await? {
-            iroh_blobs::api::proto::BlobStatus::Complete { size } => size,
-            other => return Ok(text(StatusCode::NOT_FOUND, format!("incomplete: {other:?}"))),
-        }
+    // Resolve the size without fetching — for HEAD and GET alike. The range
+    // maths and Content-Length need it up front; the bytes are fetched on
+    // demand below. (`known_size` answers from the local store, the share
+    // index, or a recent browse.)
+    let size = match known_size(state, parsed, hash).await {
+        Some(s) => s,
+        None => return Ok(text(StatusCode::NOT_FOUND, "unknown hash".into())),
     };
 
     // If-Range: only honour the Range when the validator still matches; an
@@ -317,31 +308,20 @@ async fn serve_file(
     let end_excl = end_incl + 1;
     let len = end_excl - start;
 
-    // HEAD: headers only. GET: chunked stream from the store, clipped to range.
+    // Build the body. HEAD -> headers only. Otherwise stream [start, end_excl):
+    // if the whole blob is already local, stream it straight from the store;
+    // otherwise fetch it from a peer window-by-window, so an open-ended range
+    // (`bytes=0-`) starts playing without staging the entire file first.
+    let complete = matches!(
+        state.store.blobs().status(parsed).await?,
+        iroh_blobs::api::proto::BlobStatus::Complete { .. }
+    );
     let body = if is_head {
         empty()
+    } else if complete {
+        stream_local(state, parsed, start, end_excl)
     } else {
-        let progress = state.store.blobs().export_ranges(parsed, start..end_excl);
-        let body_stream = progress.stream().filter_map(move |item| match item {
-            ExportRangesItem::Data(leaf) => {
-                let chunk_start = leaf.offset;
-                let chunk_end = leaf.offset + leaf.data.len() as u64;
-                let from = start.max(chunk_start);
-                let to = end_excl.min(chunk_end);
-                if from >= to {
-                    return None;
-                }
-                let lo = (from - chunk_start) as usize;
-                let hi = (to - chunk_start) as usize;
-                let bytes = leaf.data.slice(lo..hi);
-                Some(Ok(Frame::data(Bytes::copy_from_slice(&bytes))))
-            }
-            ExportRangesItem::Size(_) => None,
-            ExportRangesItem::Error(e) => {
-                Some(Err(std::io::Error::other(format!("export: {e}"))))
-            }
-        });
-        BodyExt::boxed_unsync(StreamBody::new(body_stream))
+        stream_windowed(state.clone(), parsed, hash.to_string(), start, end_excl)
     };
 
     let mut builder = Response::builder()
@@ -358,6 +338,70 @@ async fn serve_file(
         builder = builder.status(StatusCode::OK);
     }
     Ok(builder.body(body)?)
+}
+
+/// Each window we fetch+serve when streaming an incomplete blob from a peer.
+/// Bounds memory and time-to-first-byte for open-ended ranges.
+const WINDOW: u64 = 4 * 1024 * 1024;
+
+/// Stream `[start, end_excl)` of a fully-local blob straight from the store,
+/// per leaf, clipping to the exact byte range. Zero extra buffering.
+fn stream_local(state: &Arc<State>, parsed: iroh_blobs::Hash, start: u64, end_excl: u64) -> Body {
+    let body_stream = state
+        .store
+        .blobs()
+        .export_ranges(parsed, start..end_excl)
+        .stream()
+        .filter_map(move |item| match item {
+            ExportRangesItem::Data(leaf) => {
+                let chunk_start = leaf.offset;
+                let chunk_end = leaf.offset + leaf.data.len() as u64;
+                let from = start.max(chunk_start);
+                let to = end_excl.min(chunk_end);
+                if from >= to {
+                    return None;
+                }
+                let lo = (from - chunk_start) as usize;
+                let hi = (to - chunk_start) as usize;
+                let bytes = leaf.data.slice(lo..hi);
+                Some(Ok(Frame::data(Bytes::copy_from_slice(&bytes))))
+            }
+            ExportRangesItem::Size(_) => None,
+            ExportRangesItem::Error(e) => Some(Err(std::io::Error::other(format!("export: {e}")))),
+        });
+    BodyExt::boxed_unsync(StreamBody::new(body_stream))
+}
+
+/// Stream `[start, end_excl)` of a not-yet-local blob by fetching it from a peer
+/// one `WINDOW`-sized chunk at a time and emitting each window as it lands. If
+/// the client disconnects (e.g. a seek), the body future is dropped and we stop
+/// fetching further windows.
+fn stream_windowed(
+    state: Arc<State>,
+    parsed: iroh_blobs::Hash,
+    hash: String,
+    start: u64,
+    end_excl: u64,
+) -> Body {
+    let body_stream = async_stream::try_stream! {
+        let mut cursor = start;
+        while cursor < end_excl {
+            let win_end_excl = (cursor + WINDOW).min(end_excl);
+            transfers::fetch_range(&state, &hash, cursor, win_end_excl - 1)
+                .await
+                .map_err(|e| std::io::Error::other(format!("fetch: {e:#}")))?;
+            let bytes = state
+                .store
+                .blobs()
+                .export_ranges(parsed, cursor..win_end_excl)
+                .concatenate()
+                .await
+                .map_err(|e| std::io::Error::other(format!("export: {e}")))?;
+            yield Frame::data(Bytes::from(bytes));
+            cursor = win_end_excl;
+        }
+    };
+    BodyExt::boxed_unsync(StreamBody::new(body_stream))
 }
 
 /// Size of `hash` from what we already know, without fetching: the local store

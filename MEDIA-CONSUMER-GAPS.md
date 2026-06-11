@@ -22,28 +22,29 @@ with `file:line` references and ordered by consumer impact per unit of effort.
 
 ---
 
-## 1. We download the whole file before playing it  *(biggest gap)*
+## 1. ~~We download the whole file before playing it~~  *(done)*
 
-`serve_file` calls `transfers::ensure_local(state, hash)`
-([`http_bridge.rs:246`](filestrd/src/http_bridge.rs)) before streaming, and
-that function "ensure[s] `hash` is present in the local store, **fetching the
-whole blob** from a known source if needed"
-([`transfers.rs:214`](filestrd/src/transfers.rs)). Only once the entire file is
-local do we `export_ranges` and serve the requested range.
+**Done.** `serve_file` no longer fetches the whole blob first. It resolves the
+size without fetching (`known_size`), then streams the requested `[start, end)`:
 
-So a player's opening `Range: bytes=0-1` probe pulls the **entire file over
-iroh** before returning 2 bytes. Consequences:
+- **Fully-local blob** → streamed straight from the store per leaf
+  (`stream_local`), zero extra buffering — the path for a node's own shares.
+- **Not-yet-local blob** → fetched from a peer **one `WINDOW` (4 MiB) at a
+  time** and emitted as each window lands (`stream_windowed` →
+  `transfers::fetch_range` → bao-verified `ChunkRanges` get). An open-ended
+  `bytes=0-` starts playing after the first window instead of staging the whole
+  file; a seek opens a new range and we start a fresh window there. If the
+  client disconnects, the body future drops and we stop fetching.
 
-- No instant start / no progressive playback — first frame waits on a full
-  download.
-- Seeking near the end forces downloading everything before it.
-- A `bytes=-65536` tail probe (MP4 `moov` atom at EOF) pulls the whole file.
-- Large files feel broken on slow links even though Range *looks* supported.
+Verified end-to-end against a second node: a middle 100-byte range returned the
+correct bytes in ~50 ms (positioned fetch, not a 12 MB download); full GET and
+open-ended ranges reassembled to a byte-identical SHA-256.
 
-**Fix:** translate the HTTP Range into an iroh-blobs **ranged** request and
-stream peer → store → client as bytes arrive (bao supports verified ranged
-fetch). Turns a download-then-serve gateway into a streaming one. Largest
-effort, largest payoff.
+Remaining nuance (follow-up, not blocking): each window does fetch-then-emit, so
+within a window there's no overlap of transfer and delivery, and re-playing a
+peer file re-fetches windows (the partial blob isn't reused across requests
+unless the whole blob completes). True pipe-through (peer → client as bytes
+verify, with store reuse) is a later refinement.
 
 ## 2. The feed is filenames and blank tiles
 
@@ -109,7 +110,7 @@ album-art passthrough.
 | 1 | ~~`HEAD` + `ETag`/`If-Range`~~ | low | **done** — self-contained; unblocks pickier players + revalidation |
 | 2 | Duration + tag-based titles in the index, surfaced in `/files` | med | biggest *visible* feed upgrade; audio easy, video needs a box parse |
 | 3 | Thumbnail / album-art endpoint | med | turns the blank wall into a real library |
-| 4 | Ranged peer fetch (true streaming) | high | the architectural fix; largest payoff for big media |
+| 4 | ~~Ranged peer fetch (true streaming)~~ | high | **done** — windowed peer fetch; open-ended ranges start without staging the whole file |
 | 5 | Cache the peer-browse + paginate | med | robustness/scale for real libraries |
 
 Lower priority / likely out of scope: HLS/DASH adaptive streaming &

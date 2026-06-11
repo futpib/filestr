@@ -211,11 +211,18 @@ async fn transfer(
     Err(last_error.context("all sources failed"))
 }
 
-/// Ensure `hash` is present in the local store, fetching the whole blob from a
-/// known source if needed. Used by the HTTP bridge, which then exports/streams
-/// from the local store. No transfer bookkeeping.
+/// Ensure the inclusive byte range `[start, end]` of `hash` is present in the
+/// local store, fetching just that range (bao-verified) from a known source if
+/// needed. Used by the HTTP gateway to stream a file window-by-window without
+/// staging the whole blob. No transfer bookkeeping. A no-op if the whole blob
+/// is already local.
 #[cfg(feature = "grayjay")]
-pub(crate) async fn ensure_local(state: &Arc<State>, hash: &str) -> Result<()> {
+pub(crate) async fn fetch_range(
+    state: &Arc<State>,
+    hash: &str,
+    start: u64,
+    end: u64,
+) -> Result<()> {
     let parsed: iroh_blobs::Hash = hash.parse().map_err(|e| anyhow!("bad hash {hash}: {e}"))?;
     if matches!(
         state.store.blobs().status(parsed).await?,
@@ -229,10 +236,11 @@ pub(crate) async fn ensure_local(state: &Arc<State>, hash: &str) -> Result<()> {
     }
     let (sink, mut drain) = mpsc::channel::<u64>(32);
     let drain_task = tokio::spawn(async move { while drain.recv().await.is_some() {} });
+    let range = Some((start, end));
     let mut last_error = anyhow!("no source tried");
     let mut result = Err(anyhow!("no source tried"));
     for (peer, handle) in candidates {
-        match search::fetch_source(state, &peer, handle, hash, None, &sink).await {
+        match search::fetch_source(state, &peer, handle, hash, range, &sink).await {
             Ok(()) => {
                 result = Ok(());
                 break;
