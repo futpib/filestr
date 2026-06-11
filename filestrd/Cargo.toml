@@ -8,6 +8,10 @@ license.workspace = true
 default = ["chat"]
 # Optional nostr chat plane (Marmot/MLS hubs). Disable for an iroh-only build.
 chat = ["dep:filestr-chat", "dep:nostr"]
+# Optional loopback HTTP gateway that serves the Grayjay source plugin and
+# streams files to it (and any other localhost app). Off by default; the
+# whole hyper stack is pulled in only when enabled.
+grayjay = ["dep:hyper", "dep:hyper-util", "dep:http-body-util"]
 
 [dependencies]
 anyhow = "1.0.102"
@@ -15,9 +19,9 @@ clap = { version = "4.6.1", features = ["derive"] }
 data-encoding = "2.11.0"
 filestr-chat = { path = "../filestr-chat", optional = true }
 futures-lite = "2.6.1"
-http-body-util = "0.1"
-hyper = { version = "1", features = ["server", "http1"] }
-hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = { version = "0.1", optional = true }
+hyper = { version = "1", features = ["server", "http1"], optional = true }
+hyper-util = { version = "0.1", features = ["tokio"], optional = true }
 iroh = "1.0.0-rc.1"
 iroh-blobs = "0.102.0"
 libfilestr = { path = "../libfilestr" }

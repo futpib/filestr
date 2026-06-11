@@ -6,6 +6,7 @@
 #[cfg(feature = "chat")]
 mod chat;
 mod ctl_server;
+#[cfg(feature = "grayjay")]
 mod http_bridge;
 mod index;
 mod p2p;
@@ -246,7 +247,9 @@ async fn main() -> Result<()> {
 
     let ctl_task = tokio::spawn(ctl_server::run(state.clone(), socket.clone()));
 
-    // Optional loopback HTTP gateway (e.g. for a Grayjay plugin).
+    // Optional loopback HTTP gateway (e.g. for a Grayjay plugin). Compiled in
+    // only with the `grayjay` feature (off by default).
+    #[cfg(feature = "grayjay")]
     {
         let listen = state.config.read().await.http.listen.clone();
         if let Some(addr) = listen {
@@ -262,6 +265,10 @@ async fn main() -> Result<()> {
                 Err(e) => tracing::error!("bad [http] listen {addr:?}: {e}"),
             }
         }
+    }
+    #[cfg(not(feature = "grayjay"))]
+    if state.config.read().await.http.listen.is_some() {
+        tracing::warn!("[http] listen is set but filestrd was built without the `grayjay` feature; gateway disabled");
     }
 
     #[cfg(feature = "chat")]

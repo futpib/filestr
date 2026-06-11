@@ -214,6 +214,7 @@ async fn transfer(
 /// Ensure `hash` is present in the local store, fetching the whole blob from a
 /// known source if needed. Used by the HTTP bridge, which then exports/streams
 /// from the local store. No transfer bookkeeping.
+#[cfg(feature = "grayjay")]
 pub(crate) async fn ensure_local(state: &Arc<State>, hash: &str) -> Result<()> {
     let parsed: iroh_blobs::Hash = hash.parse().map_err(|e| anyhow!("bad hash {hash}: {e}"))?;
     if matches!(
