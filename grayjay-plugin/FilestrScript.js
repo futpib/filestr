@@ -88,7 +88,10 @@ function fetchFiles() {
 }
 
 function listVideos(query) {
-	let files = fetchFiles();
+	// Only surface files Grayjay can actually play (audio/video). Anything that
+	// maps to the generic octet-stream container (docs, archives, apks, …) is
+	// hidden — Grayjay would just fail to open it.
+	let files = fetchFiles().filter((f) => isPlayable(f.name));
 	if (query) {
 		const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
 		files = files.filter((f) => {
@@ -142,6 +145,10 @@ function baseName(path) {
 	if (!path) return "";
 	const parts = path.split("/");
 	return parts[parts.length - 1] || path;
+}
+
+function isPlayable(name) {
+	return containerOf(name) !== "application/octet-stream";
 }
 
 function containerOf(name) {
