@@ -13,23 +13,21 @@ CONFIG="$TESTDIR/A/config.toml"
 # starts empty
 [ "$(fctl A --json share ls | jq '.shares | length')" = 0 ] || die "expected no shares initially"
 
-# add: default name = basename, file indexed right away
-ADD="$(fctl A --json share add "$TESTDIR/media")"
-echo "$ADD" | jq -e '.shares[] | select(.name=="media") | .files == 1' > /dev/null \
-    || die "share add did not add+index the dir: $ADD"
+# add: default name = basename. The share appears in config at once; its files
+# are hashed in the background, so the count fills in shortly after.
+fctl A --json share add "$TESTDIR/media" | jq -e '.shares[] | select(.name=="media")' > /dev/null \
+    || die "share add did not register the dir"
+wait_share_files A media 1
 
 # persisted to the config file
 grep -q 'name = "media"' "$CONFIG" || die "share not written to config"
-
-# still there on a fresh listing
-fctl A --json share ls | jq -e '.shares[] | select(.name=="media")' > /dev/null \
-    || die "share ls missing media after add"
 
 # a second dir with an explicit name
 mkdir -p "$TESTDIR/docs"
 echo hello > "$TESTDIR/docs/readme.txt"
 fctl A --json share add "$TESTDIR/docs" --name documents > /dev/null
 [ "$(fctl A --json share ls | jq '.shares | length')" = 2 ] || die "second share not added"
+wait_share_files A documents 1
 
 # adding a duplicate name fails
 if fctl A share add "$TESTDIR/media" > /dev/null 2>&1; then

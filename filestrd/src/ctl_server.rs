@@ -409,19 +409,31 @@ async fn handle_share_add(
             .with_context(|| format!("cannot derive a name from {}; pass --name", dir.display()))?,
     };
     add_share_to_config(&state.config_path, &name, &dir)?;
-    // Validate by reloading; if the new config is rejected, roll the edit back.
-    if let Err(e) = crate::reload_config(state).await {
+    // Validate the edited config (cheap, no scan); roll the edit back if it's
+    // rejected.
+    if let Err(e) = crate::apply_config(state).await {
         let _ = remove_share_from_config(&state.config_path, &name);
-        let _ = crate::reload_config(state).await;
+        let _ = crate::apply_config(state).await;
         return Err(e.context("new share rejected; reverted config"));
     }
+    // Index the new files in the BACKGROUND — hashing a big directory is slow,
+    // so the command returns at once and the share's file count fills in as the
+    // scan completes (parallel, at low CPU/IO priority — see priority.rs).
+    let st = state.clone();
+    tokio::spawn(async move {
+        if let Err(e) = crate::rescan_now(&st).await {
+            tracing::warn!("background rescan after share add failed: {e:#}");
+        }
+    });
     state.emit("share_added", serde_json::json!({ "name": name, "path": dir }));
     handle_share_list(state).await
 }
 
 async fn handle_share_remove(state: &Arc<State>, name: String) -> Result<ResponseBody> {
     remove_share_from_config(&state.config_path, &name)?;
-    crate::reload_config(state).await.context("reload after removing share")?;
+    crate::apply_config(state).await.context("apply config after removing share")?;
+    // Removing only drops entries (everything else is reused), so this is cheap.
+    crate::rescan_now(state).await.context("rescan after removing share")?;
     state.emit("share_removed", serde_json::json!({ "name": name }));
     handle_share_list(state).await
 }

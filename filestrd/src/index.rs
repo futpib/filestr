@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use iroh_blobs::BlobFormat;
 use iroh_blobs::api::blobs::AddPathOptions;
 use iroh_blobs::api::proto::ImportMode;
@@ -98,6 +98,7 @@ pub async fn scan(
         prev.files.iter().map(|f| (f.path.as_str(), f)).collect();
 
     let mut files = Vec::new();
+    let mut pending: Vec<PendingFile> = Vec::new();
     let mut reused = 0usize;
     for root in &config.share {
         let base = libfilestr::paths::expand_path(&root.path);
@@ -150,21 +151,42 @@ pub async fn scan(
                     }
                 }
             }
+            pending.push(PendingFile { root: root.name.clone(), abs, path, size, mtime });
+        }
+    }
 
-            let tag = store
+    // Hash + probe the new/changed files concurrently — up to one job per core,
+    // so a `share add` of a large directory saturates the CPU (the daemon runs
+    // niced, so this still yields to foreground work). A single bad file is
+    // logged and skipped rather than failing the whole scan.
+    let to_hash = pending.len();
+    let concurrency = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
+    let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(concurrency));
+    let mut set = tokio::task::JoinSet::new();
+    for p in pending {
+        let permit = sem.clone().acquire_owned().await.expect("semaphore");
+        let store = store.clone();
+        let thumbs = thumbs_dir.to_path_buf();
+        set.spawn(async move {
+            let _permit = permit;
+            let tag = match store
                 .blobs()
                 .add_path_with_opts(AddPathOptions {
-                    path: abs.clone(),
+                    path: p.abs.clone(),
                     mode: ImportMode::TryReference,
                     format: BlobFormat::Raw,
                 })
                 .await
-                .with_context(|| format!("importing {}", abs.display()))?;
-            // Probe media metadata off the async runtime (it does blocking file
-            // IO). Best-effort: failures yield empty metadata.
+            {
+                Ok(t) => t,
+                Err(e) => {
+                    tracing::warn!("importing {}: {e:#}", p.abs.display());
+                    return None;
+                }
+            };
             let probed = {
-                let p = abs.clone();
-                tokio::task::spawn_blocking(move || crate::metadata::probe(&p))
+                let path = p.abs.clone();
+                tokio::task::spawn_blocking(move || crate::metadata::probe(&path))
                     .await
                     .unwrap_or_default()
             };
@@ -172,18 +194,33 @@ pub async fn scan(
             // Cache any embedded cover art as a thumbnail keyed by content hash,
             // for the gateway's /thumb/{hash} to serve. Best-effort.
             if let Some(cover) = probed.cover {
-                let _ = tokio::fs::write(thumbs_dir.join(&hash), &cover).await;
+                let _ = tokio::fs::write(thumbs.join(&hash), &cover).await;
             }
-            files.push(IndexedFile {
-                root: root.name.clone(),
-                path,
-                size,
-                mtime,
+            Some(IndexedFile {
+                root: p.root,
+                path: p.path,
+                size: p.size,
+                mtime: p.mtime,
                 hash,
                 media: probed.meta,
-            });
+            })
+        });
+    }
+    while let Some(res) = set.join_next().await {
+        if let Ok(Some(f)) = res {
+            files.push(f);
         }
     }
-    tracing::info!(files = files.len(), reused, "share scan complete");
+
+    tracing::info!(files = files.len(), reused, hashed = to_hash, "share scan complete");
     Ok(Index { files })
+}
+
+/// A file that needs hashing + metadata probing (new or changed since `prev`).
+struct PendingFile {
+    root: String,
+    abs: std::path::PathBuf,
+    path: String,
+    size: u64,
+    mtime: u64,
 }

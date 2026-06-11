@@ -11,6 +11,7 @@ mod http_bridge;
 mod index;
 mod metadata;
 mod p2p;
+mod priority;
 mod search;
 mod state;
 mod transfers;
@@ -88,31 +89,56 @@ fn load_iroh_key(data_dir: &std::path::Path, root: &RootKey) -> Result<SecretKey
     }
 }
 
-/// Re-read the config file and rescan shares, swapping in the new config + index
-/// on success. Returns the file count. On any error the old state is untouched.
-pub(crate) async fn reload_config(state: &Arc<State>) -> Result<usize> {
+/// Re-read and validate the config file, swapping it in. No rescan — cheap.
+pub(crate) async fn apply_config(state: &Arc<State>) -> Result<()> {
     let config = Config::load_or_default(&state.config_path)?;
+    *state.config.write().await = config;
+    Ok(())
+}
+
+/// Rescan shares against the current (in-memory) config, reusing unchanged files
+/// from the current index, and swap the new index in. Returns the file count.
+pub(crate) async fn rescan_now(state: &Arc<State>) -> Result<usize> {
+    let config = state.config.read().await.clone();
     let prev = state.index.read().await.clone();
     let new_index = index::scan(&config, &state.store, &state.thumbs_dir, &prev).await?;
     let files = new_index.files.len();
     *state.index.write().await = new_index;
-    *state.config.write().await = config;
     state.emit("reloaded", serde_json::json!({ "files": files }));
     Ok(files)
 }
 
+/// SIGHUP: re-read config and rescan synchronously.
 async fn reload(state: &Arc<State>) {
-    match reload_config(state).await {
+    if let Err(e) = apply_config(state).await {
+        tracing::warn!("config reload failed, keeping old config: {e:#}");
+        return;
+    }
+    match rescan_now(state).await {
         Ok(files) => tracing::info!(files, "config reloaded, share rescanned"),
-        Err(e) => tracing::warn!("config reload failed, keeping old state: {e:#}"),
+        Err(e) => tracing::warn!("rescan failed: {e:#}"),
     }
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     let args = Args::parse();
     init_tracing(args.verbose);
+    // A dedicated low-priority runtime hosts the blob store, so share hashing and
+    // blob IO yield to foreground work. The main runtime — control socket,
+    // endpoint, search routing — stays at normal priority.
+    let blob_runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_name("filestr-blobs")
+        .on_thread_start(priority::lower_current_thread)
+        .build()?;
+    let main_runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+    let result = main_runtime.block_on(run(args, blob_runtime.handle().clone()));
+    // keep the blob runtime alive until the main loop returns
+    drop(blob_runtime);
+    result
+}
 
+async fn run(args: Args, blob_rt: tokio::runtime::Handle) -> Result<()> {
     let config_path = args.config.unwrap_or_else(paths::config_path);
     let config = Config::load_or_default(&config_path)
         .with_context(|| format!("loading {}", config_path.display()))?;
@@ -138,7 +164,16 @@ async fn main() -> Result<()> {
     let root = RootKey::load_or_create(&data_dir.join("identity.key"))
         .context("loading identity key")?;
     let secret_key = load_iroh_key(&data_dir, &root)?;
-    let store = FsStore::load(cache_dir.join("blobs")).await.context("opening blob store")?;
+    // Load the store on the low-priority blob runtime so its actor — and the
+    // hashing/IO it drives — runs niced, off the main runtime.
+    let store = {
+        let blobs_path = cache_dir.join("blobs");
+        blob_rt
+            .spawn(async move { FsStore::load(blobs_path).await })
+            .await
+            .context("joining blob store load")?
+            .context("opening blob store")?
+    };
     // Regenerable cache of cover-art thumbnails, keyed by content hash.
     let thumbs_dir = cache_dir.join("thumbs");
     std::fs::create_dir_all(&thumbs_dir).context("creating thumbs dir")?;

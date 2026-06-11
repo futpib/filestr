@@ -1359,6 +1359,7 @@ dependencies = [
  "hyper-util",
  "iroh",
  "iroh-blobs",
+ "libc",
  "libfilestr",
  "mp4",
  "n0-error",

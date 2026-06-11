@@ -89,6 +89,18 @@ node_id() {
     fctl "$1" --json status | jq -r .endpoint_id
 }
 
+# wait_share_files <node> <share-name> <count> — poll until a share has indexed
+# the expected number of files (`share add` hashes in the background).
+wait_share_files() {
+    local node="$1" name="$2" want="$3" i got
+    for i in $(seq 1 100); do
+        got="$(fctl "$node" --json share ls | jq "[.shares[]|select(.name==\"$name\")|.files][0] // 0")"
+        [ "$got" = "$want" ] && return 0
+        sleep 0.1
+    done
+    die "share $name indexed $got files, expected $want"
+}
+
 # wait_http <url> — poll until an HTTP GET succeeds (gateway comes up a moment
 # after the control socket).
 wait_http() {
