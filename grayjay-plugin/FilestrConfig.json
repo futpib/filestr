@@ -1,0 +1,27 @@
+{
+	"name": "filestr (local)",
+	"description": "Browse and play files served by the filestr app running on this device, over its local HTTP gateway.",
+	"author": "filestr",
+	"authorUrl": "https://github.com/futpib-bot2/filestr",
+	"sourceUrl": "http://127.0.0.1:11780/grayjay/FilestrConfig.json",
+	"repositoryUrl": "https://github.com/futpib-bot2/filestr",
+	"scriptUrl": "./FilestrScript.js",
+	"version": 1,
+	"iconUrl": "./filestr.png",
+	"id": "c1da0f43-37c2-4405-876e-5597683c578f",
+	"packages": ["Http"],
+	"allowEval": false,
+	"allowUrls": [
+		"127.0.0.1:11780",
+		"localhost:11780"
+	],
+	"settings": [
+		{
+			"variable": "serverUrl",
+			"name": "filestr gateway URL",
+			"description": "Base URL of the filestr app's local HTTP gateway.",
+			"type": "Text",
+			"default": "http://127.0.0.1:11780"
+		}
+	]
+}
