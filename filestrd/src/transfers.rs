@@ -211,6 +211,42 @@ async fn transfer(
     Err(last_error.context("all sources failed"))
 }
 
+/// Ensure `hash` is present in the local store, fetching the whole blob from a
+/// known source if needed. Used by the HTTP bridge, which then exports/streams
+/// from the local store. No transfer bookkeeping.
+pub(crate) async fn ensure_local(state: &Arc<State>, hash: &str) -> Result<()> {
+    let parsed: iroh_blobs::Hash = hash.parse().map_err(|e| anyhow!("bad hash {hash}: {e}"))?;
+    if matches!(
+        state.store.blobs().status(parsed).await?,
+        iroh_blobs::api::proto::BlobStatus::Complete { .. }
+    ) {
+        return Ok(());
+    }
+    let candidates = candidates(state, hash, &None).await?;
+    if candidates.is_empty() {
+        return Err(anyhow!("no known source for {hash}; browse or search it first"));
+    }
+    let (sink, mut drain) = mpsc::channel::<u64>(32);
+    let drain_task = tokio::spawn(async move { while drain.recv().await.is_some() {} });
+    let mut last_error = anyhow!("no source tried");
+    let mut result = Err(anyhow!("no source tried"));
+    for (peer, handle) in candidates {
+        match search::fetch_source(state, &peer, handle, hash, None, &sink).await {
+            Ok(()) => {
+                result = Ok(());
+                break;
+            }
+            Err(e) => {
+                tracing::debug!("source {} failed: {e:#}", peer.node_id);
+                last_error = e;
+            }
+        }
+    }
+    drop(sink);
+    let _ = drain_task.await;
+    result.map_err(|_: anyhow::Error| last_error.context("all sources failed"))
+}
+
 /// Candidate sources for `hash`: recent search/browse results (optionally
 /// filtered by `peer_pref`), falling back to `peer_pref` as a direct peer.
 async fn candidates(

@@ -6,6 +6,7 @@
 #[cfg(feature = "chat")]
 mod chat;
 mod ctl_server;
+mod http_bridge;
 mod index;
 mod p2p;
 mod search;
@@ -147,6 +148,7 @@ async fn main() -> Result<()> {
     };
     // presets::Minimal on purpose: no address lookup at all — this node is
     // never published anywhere; it is dialable only via tickets (DESIGN.md §2)
+    #[cfg_attr(not(target_os = "android"), allow(unused_mut))]
     let mut builder = Endpoint::builder(presets::Minimal)
         .secret_key(secret_key)
         .relay_mode(relay_mode);
@@ -243,6 +245,24 @@ async fn main() -> Result<()> {
         .spawn();
 
     let ctl_task = tokio::spawn(ctl_server::run(state.clone(), socket.clone()));
+
+    // Optional loopback HTTP gateway (e.g. for a Grayjay plugin).
+    {
+        let listen = state.config.read().await.http.listen.clone();
+        if let Some(addr) = listen {
+            match addr.parse::<std::net::SocketAddr>() {
+                Ok(sa) => {
+                    let s = state.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = http_bridge::serve(s, sa).await {
+                            tracing::error!("http gateway stopped: {e:#}");
+                        }
+                    });
+                }
+                Err(e) => tracing::error!("bad [http] listen {addr:?}: {e}"),
+            }
+        }
+    }
 
     #[cfg(feature = "chat")]
     if state.chat.is_some() {

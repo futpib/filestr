@@ -15,6 +15,9 @@ clap = { version = "4.6.1", features = ["derive"] }
 data-encoding = "2.11.0"
 filestr-chat = { path = "../filestr-chat", optional = true }
 futures-lite = "2.6.1"
+http-body-util = "0.1"
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
 iroh = "1.0.0-rc.1"
 iroh-blobs = "0.102.0"
 libfilestr = { path = "../libfilestr" }

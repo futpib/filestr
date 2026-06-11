@@ -29,6 +29,7 @@ pub struct Config {
     pub invite: InviteConfig,
     pub reputation: ReputationConfig,
     pub chat: ChatConfig,
+    pub http: HttpConfig,
     /// Shared directories. Each root has a unique name used by views.
     pub share: Vec<ShareRoot>,
     /// Named views: view name -> list of share root names. The view "full"
@@ -212,6 +213,16 @@ impl Default for ChatConfig {
             auto_admit: false,
         }
     }
+}
+
+/// Local HTTP gateway: a read-only, loopback-only bridge that lets other apps
+/// on the same device (e.g. a Grayjay plugin) list and stream the files this
+/// node can serve. Off by default; bind only to localhost.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct HttpConfig {
+    /// TCP address to listen on, e.g. "127.0.0.1:11780". Disabled when unset.
+    pub listen: Option<String>,
 }
 
 #[derive(Debug)]
