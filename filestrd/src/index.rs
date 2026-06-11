@@ -128,7 +128,10 @@ pub async fn scan(
     store: &FsStore,
     thumbs_dir: &std::path::Path,
     prev: &Index,
+    cancel: &tokio_util::sync::CancellationToken,
+    progress: &std::sync::Arc<crate::state::ScanProgress>,
 ) -> Result<Index> {
+    use std::sync::atomic::Ordering;
     // visible path -> previously indexed file, for the unchanged-file fast path
     let prev_by_path: HashMap<&str, &IndexedFile> =
         prev.files.iter().map(|f| (f.path.as_str(), f)).collect();
@@ -196,13 +199,20 @@ pub async fn scan(
     // niced, so this still yields to foreground work). A single bad file is
     // logged and skipped rather than failing the whole scan.
     let to_hash = pending.len();
+    progress.total.store((reused + to_hash) as u64, Ordering::Relaxed);
+    progress.done.store(reused as u64, Ordering::Relaxed);
     let concurrency = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
     let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(concurrency));
     let mut set = tokio::task::JoinSet::new();
     for p in pending {
+        // Stop launching new work once cancelled; in-flight jobs are aborted below.
+        if cancel.is_cancelled() {
+            break;
+        }
         let permit = sem.clone().acquire_owned().await.expect("semaphore");
         let store = store.clone();
         let thumbs = thumbs_dir.to_path_buf();
+        let progress = progress.clone();
         set.spawn(async move {
             let _permit = permit;
             let tag = match store
@@ -232,6 +242,7 @@ pub async fn scan(
             if let Some(cover) = probed.cover {
                 let _ = tokio::fs::write(thumbs.join(&hash), &cover).await;
             }
+            progress.done.fetch_add(1, Ordering::Relaxed);
             Some(IndexedFile {
                 root: p.root,
                 path: p.path,
@@ -242,12 +253,27 @@ pub async fn scan(
             })
         });
     }
-    while let Some(res) = set.join_next().await {
-        if let Ok(Some(f)) = res {
-            files.push(f);
+    // Drain results; on cancellation abort the in-flight jobs and stop.
+    loop {
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => {
+                set.shutdown().await;
+                break;
+            }
+            res = set.join_next() => match res {
+                Some(Ok(Some(f))) => files.push(f),
+                Some(_) => {}
+                None => break,
+            },
         }
     }
+    progress.active.store(false, Ordering::Relaxed);
 
+    if cancel.is_cancelled() {
+        tracing::info!(reused, "share scan cancelled");
+        anyhow::bail!("scan cancelled");
+    }
     tracing::info!(files = files.len(), reused, hashed = to_hash, "share scan complete");
     Ok(Index { files })
 }

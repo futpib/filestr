@@ -39,8 +39,12 @@ enum Command {
         #[command(subcommand)]
         command: ShareCommand,
     },
-    /// Rescan share roots
-    Rescan,
+    /// Rescan share roots (or cancel an in-flight scan with --cancel)
+    Rescan {
+        /// Cancel a scan that's currently hashing, instead of starting one
+        #[arg(long)]
+        cancel: bool,
+    },
     /// Fetch a peer's file list
     Browse { peer: String },
     /// Search the grant graph; results stream in as peers answer
@@ -235,6 +239,10 @@ async fn run() -> Result<()> {
                 println!("relays:        {}", status.relays.join(", "));
                 println!("direct addrs:  {}", status.direct_addrs.join(", "));
                 println!("shared files:  {}", status.files);
+                if let Some(p) = &status.indexing {
+                    let pct = if p.total > 0 { p.done * 100 / p.total } else { 0 };
+                    println!("indexing:      {}/{} ({}%)", p.done, p.total, pct);
+                }
                 println!(
                     "grants:        {} active, {} issued",
                     status.grants_active, status.grants_issued
@@ -373,13 +381,16 @@ async fn run() -> Result<()> {
                 }
             }
         }
-        Command::Rescan => {
-            let response = client.roundtrip(RequestBody::Rescan).await?;
+        Command::Rescan { cancel } => {
+            let request = if cancel { RequestBody::ScanCancel } else { RequestBody::Rescan };
+            let response = client.roundtrip(request).await?;
             let ResponseBody::Rescanned { files } = response else {
                 bail!("unexpected response");
             };
             if cli.json {
                 print_json(&serde_json::json!({ "files": files }));
+            } else if cancel {
+                println!("scan cancelled ({files} files indexed)");
             } else {
                 println!("rescanned: {files} files");
             }

@@ -48,12 +48,15 @@ cargo build --workspace          # binaries: filestrd, filestrctl
 
 filestrd -v                      # foreground daemon (or use filestrd.service)
 
-# share a directory (persisted to ~/.config/filestr/config.toml, indexed now):
-filestrctl share add ~/music                  # name defaults to the basename
-filestrctl share add ~/podcasts --name pods   # …or name it
+# share a directory (persisted to ~/.config/filestr/config.toml):
+filestrctl share add ~/music                  # returns at once; hashes in the
+                                              # background (parallel, low prio)
+filestrctl status                             # shows "indexing: 34/512" while it runs
+filestrctl rescan --cancel                    # stop an in-flight scan
 filestrctl share ls                           # list roots + views
-filestrctl share rm pods                       # stop sharing
-# (or hand-edit the [[share]] blocks in the config and `filestrctl rescan`)
+filestrctl share rm music                      # stop sharing (cancels its scan)
+# files are referenced in place (not copied); the index is cached, so a restart
+# doesn't re-hash unchanged files. Or hand-edit [[share]] blocks + `filestrctl rescan`.
 
 filestrctl invite create --label alice    # prints a filestr1… ticket; send it
                                           # to Alice over any channel you trust

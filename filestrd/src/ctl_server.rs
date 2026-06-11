@@ -8,8 +8,8 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow};
 use libfilestr::config::{RelaySetting, VIEW_FULL};
 use libfilestr::ctl::{
-    DaemonStatus, FileEntry, InviteInfo, PeerInfo, Request, RequestBody, Response, ResponseBody,
-    SearchHit, ShareInfo, ViewInfo,
+    DaemonStatus, FileEntry, IndexProgress, InviteInfo, PeerInfo, Request, RequestBody, Response,
+    ResponseBody, SearchHit, ShareInfo, ViewInfo,
 };
 use libfilestr::grants::PeerIn;
 use libfilestr::p2p::{P2pRequest, P2pResponse};
@@ -127,6 +127,7 @@ async fn handle_simple(state: &Arc<State>, body: RequestBody) -> ResponseBody {
         RequestBody::ShareAdd { path, name } => handle_share_add(state, path, name).await,
         RequestBody::ShareRemove { name } => handle_share_remove(state, name).await,
         RequestBody::Rescan => handle_rescan(state).await,
+        RequestBody::ScanCancel => handle_scan_cancel(state).await,
         RequestBody::Browse { peer } => handle_browse(state, peer).await,
         RequestBody::Transfers => handle_transfers(state).await,
         RequestBody::TransferCancel { id } => handle_transfer_cancel(state, id).await,
@@ -177,8 +178,17 @@ async fn handle_status(state: &Arc<State>) -> Result<ResponseBody> {
             grants_issued: issued,
             peers: grants.grants.peers.len(),
             version: VERSION.to_string(),
+            indexing: state
+                .scan_progress()
+                .map(|(done, total)| IndexProgress { done, total }),
         },
     })
+}
+
+async fn handle_scan_cancel(state: &Arc<State>) -> Result<ResponseBody> {
+    let cancelled = state.cancel_scan();
+    state.emit("scan_cancelled", serde_json::json!({ "cancelled": cancelled }));
+    Ok(ResponseBody::Rescanned { files: state.index.read().await.files.len() })
 }
 
 /// Wait briefly until the endpoint has a dialable address to put in tickets.
@@ -417,13 +427,10 @@ async fn handle_share_add(
     }
     // Index the new files in the BACKGROUND — hashing a big directory is slow,
     // so the command returns at once and the share's file count fills in as the
-    // scan completes (parallel, at low CPU/IO priority — see priority.rs).
-    let st = state.clone();
-    tokio::spawn(async move {
-        if let Err(e) = crate::rescan_now(&st).await {
-            tracing::warn!("background rescan after share add failed: {e:#}");
-        }
-    });
+    // scan completes (parallel, at low CPU/IO priority — see priority.rs). The
+    // scan is cancellable and its progress shows in `status`; `share rm` of this
+    // share cancels it.
+    crate::spawn_rescan(state);
     state.emit("share_added", serde_json::json!({ "name": name, "path": dir }));
     handle_share_list(state).await
 }

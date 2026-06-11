@@ -2,9 +2,12 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use iroh::Endpoint;
+use tokio_util::sync::CancellationToken;
 use iroh_blobs::store::fs::FsStore;
 use libfilestr::config::Config;
 use libfilestr::ctl::Event;
@@ -29,6 +32,8 @@ pub struct State {
     /// re-hashing unchanged files.
     pub index_path: PathBuf,
     pub index: tokio::sync::RwLock<Index>,
+    /// Tracks the in-flight share scan: a cancel token and progress counters.
+    pub scan: std::sync::Mutex<ScanCtl>,
     pub handles: tokio::sync::Mutex<Handles>,
     pub seen_queries: tokio::sync::Mutex<SeenQueries>,
     pub recent_sources: tokio::sync::Mutex<RecentSources>,
@@ -46,9 +51,61 @@ pub struct State {
     pub shutdown: tokio_util::sync::CancellationToken,
 }
 
+/// Cancellation + progress for the current/last share scan. Each scan installs
+/// a fresh token and a fresh progress counter; an old (superseded) scan updates
+/// its own counter, so reads always reflect the latest scan.
+#[derive(Default)]
+pub struct ScanCtl {
+    pub cancel: Option<CancellationToken>,
+    pub progress: Arc<ScanProgress>,
+}
+
+#[derive(Default)]
+pub struct ScanProgress {
+    pub active: AtomicBool,
+    pub done: AtomicU64,
+    pub total: AtomicU64,
+}
+
 impl State {
     pub fn emit(&self, event_type: &str, payload: serde_json::Value) {
         let _ = self.events.send(Event { event_type: event_type.to_string(), payload });
+    }
+
+    /// Begin a scan: cancel any in-flight scan, then install a fresh cancel
+    /// token and progress counter. Returns them for the new scan to drive.
+    pub fn begin_scan(&self) -> (CancellationToken, Arc<ScanProgress>) {
+        let token = CancellationToken::new();
+        let progress = Arc::new(ScanProgress::default());
+        progress.active.store(true, Ordering::Relaxed);
+        let mut ctl = self.scan.lock().unwrap();
+        if let Some(old) = ctl.cancel.replace(token.clone()) {
+            old.cancel();
+        }
+        ctl.progress = progress.clone();
+        (token, progress)
+    }
+
+    /// Cancel the in-flight scan, if any.
+    pub fn cancel_scan(&self) -> bool {
+        let ctl = self.scan.lock().unwrap();
+        match &ctl.cancel {
+            Some(token) => {
+                token.cancel();
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Snapshot scan progress (done, total) if a scan is currently active.
+    pub fn scan_progress(&self) -> Option<(u64, u64)> {
+        let p = self.scan.lock().unwrap().progress.clone();
+        if p.active.load(Ordering::Relaxed) {
+            Some((p.done.load(Ordering::Relaxed), p.total.load(Ordering::Relaxed)))
+        } else {
+            None
+        }
     }
 
     /// Borrow the chat plane, erroring if it's disabled.

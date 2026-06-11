@@ -67,6 +67,8 @@ pub enum RequestBody {
         name: String,
     },
     Rescan,
+    /// Cancel an in-flight share scan (hashing).
+    ScanCancel,
     /// Fetch the remote file list of a peer that granted us access.
     Browse {
         peer: String,
@@ -202,6 +204,16 @@ pub struct DaemonStatus {
     pub grants_issued: usize,
     pub peers: usize,
     pub version: String,
+    /// Present while a share scan (hashing) is in progress.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub indexing: Option<IndexProgress>,
+}
+
+/// Progress of an in-flight share scan: `done` of `total` files hashed/reused.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IndexProgress {
+    pub done: u64,
+    pub total: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
