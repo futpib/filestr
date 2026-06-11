@@ -75,9 +75,10 @@ try {
 	const search = source.search(term, null, null, {}, null);
 	out.search = { term: term, count: search.results.length, names: search.results.map(v => v.name) };
 
-	// mime-type search filter: audio-only and video-only partitions
-	const audio = source.search("", null, null, { mime: ["audio"] }, null);
-	const video = source.search("", null, null, { mime: ["video"] }, null);
+	// mime-type search filter: the audio-only and video-only partitions of the
+	// SAME query must add back up to its unfiltered result count
+	const audio = source.search(term, null, null, { mime: ["audio"] }, null);
+	const video = source.search(term, null, null, { mime: ["video"] }, null);
 	out.filter = { audio: audio.results.length, video: video.results.length };
 
 	// pick an item from home to exercise details/streaming
@@ -148,9 +149,9 @@ check(
 	`search=${out.search.count} home=${out.home.count}`
 );
 check(
-	"mime filter partitions home into audio+video",
-	out.filter.audio + out.filter.video === out.home.count,
-	`audio=${out.filter.audio} video=${out.filter.video} home=${out.home.count}`
+	"mime filter partitions the query results into audio+video",
+	out.filter.audio + out.filter.video === out.search.count,
+	`audio=${out.filter.audio} video=${out.filter.video} search=${out.search.count}`
 );
 check("isContentDetailsUrl(true) for a file url", out.isDetailsUrl === true);
 check(

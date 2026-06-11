@@ -42,7 +42,9 @@ impl Index {
             .collect()
     }
 
-    /// Case-insensitive AND-of-terms substring search over visible paths.
+    /// Case-insensitive AND-of-terms substring search over the visible path and
+    /// the media tags (title/artist/album), so a query matches what a consumer
+    /// actually sees in the feed, not just the filename.
     pub fn search(&self, roots: &[String], query: &str) -> Vec<&IndexedFile> {
         let terms: Vec<String> = query.split_whitespace().map(|t| t.to_lowercase()).collect();
         if terms.is_empty() {
@@ -52,7 +54,13 @@ impl Index {
             .iter()
             .filter(|f| roots.contains(&f.root))
             .filter(|f| {
-                let haystack = f.path.to_lowercase();
+                let mut haystack = f.path.to_lowercase();
+                for tag in [&f.media.title, &f.media.artist, &f.media.album] {
+                    if let Some(t) = tag {
+                        haystack.push(' ');
+                        haystack.push_str(&t.to_lowercase());
+                    }
+                }
                 terms.iter().all(|t| haystack.contains(t))
             })
             .collect()

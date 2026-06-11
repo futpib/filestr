@@ -17,7 +17,7 @@ source.enable = function (conf, settings, savedState) {
 };
 
 source.getHome = function (continuationToken) {
-	return new FilestrVideoPager(listVideos(null));
+	return new FilestrVideoPager(toVideos(fetchFiles(), null));
 };
 
 source.searchSuggestions = function (query) {
@@ -47,7 +47,7 @@ source.getSearchCapabilities = function () {
 };
 
 source.search = function (query, type, order, filters, continuationToken) {
-	return new FilestrVideoPager(listVideos(query, mimeClassesFromFilters(filters)));
+	return new FilestrVideoPager(toVideos(fetchSearch(query), mimeClassesFromFilters(filters)));
 };
 
 // Extract the selected media classes (e.g. ["audio"]) from Grayjay's filters
@@ -103,36 +103,36 @@ source.getContentDetails = function (url) {
 
 // --- helpers ---------------------------------------------------------------
 
-function fetchFiles() {
-	const res = http.GET(`${BASE_URL}/files`, {});
+function fetchJson(pathAndQuery) {
+	const res = http.GET(`${BASE_URL}${pathAndQuery}`, {});
 	if (!res.isOk) {
-		throw new ScriptException(`filestr gateway ${res.code} at ${BASE_URL}/files`);
+		throw new ScriptException(`filestr gateway ${res.code} at ${BASE_URL}${pathAndQuery}`);
 	}
-	const data = JSON.parse(res.body);
-	return data.files || [];
+	return JSON.parse(res.body).files || [];
 }
 
-function listVideos(query, mimeClasses) {
-	// Only surface files Grayjay can actually play (audio/video). Anything that
-	// maps to the generic octet-stream container (docs, archives, apks, …) is
-	// hidden — Grayjay would just fail to open it.
-	let files = fetchFiles().filter((f) => isPlayable(f.name));
+// Everything this node can serve (its shares + a one-hop browse of peers).
+function fetchFiles() {
+	return fetchJson("/files");
+}
+
+// The daemon's federated grant-graph search: reaches the whole reachable graph,
+// not just direct peers, and matches the tag metadata (title/artist/album), not
+// just the filename. The gateway records sources so the results are playable.
+function fetchSearch(query) {
+	if (!query) return [];
+	return fetchJson(`/search?q=${encodeURIComponent(query)}`);
+}
+
+// Shared pipeline: keep only files Grayjay can play (audio/video — anything that
+// maps to the generic octet-stream container is hidden), optionally restrict to
+// the selected media classes, then map to Grayjay videos.
+function toVideos(files, mimeClasses) {
+	let out = files.filter((f) => isPlayable(f.name));
 	if (mimeClasses && mimeClasses.length) {
-		files = files.filter((f) => mimeClasses.indexOf(mimeClassOf(f.name)) !== -1);
+		out = out.filter((f) => mimeClasses.indexOf(mimeClassOf(f.name)) !== -1);
 	}
-	if (query) {
-		const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
-		files = files.filter((f) => {
-			// match what the user actually sees: filename plus the tag metadata
-			const m = f.media || {};
-			const hay = [f.name, m.title, m.artist, m.album]
-				.filter(Boolean)
-				.join(" ")
-				.toLowerCase();
-			return terms.every((t) => hay.indexOf(t) !== -1);
-		});
-	}
-	return files.map(fileToVideo);
+	return out.map(fileToVideo);
 }
 
 function fileToVideo(f) {

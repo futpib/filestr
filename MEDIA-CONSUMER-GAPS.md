@@ -113,10 +113,15 @@ cleanup on rescan.
   synchronously over iroh ([`http_bridge.rs:130-158`](filestrd/src/http_bridge.rs)),
   so it's slow and one dead/slow peer stalls the whole feed (the 408 we hit).
   Should be cached / incremental.
-- **Search is shallow** — the plugin filters the already-aggregated `/files` by
-  substring (`listVideos`); it does **not** use the daemon's grant-graph
-  federated search ([`filestrd/src/search.rs`](filestrd/src/search.rs)). The
-  only sort/filter offered is the audio/video toggle (`sorts: []`).
+- ~~**Search is shallow**~~ — **done.** The gateway exposes `GET /search?q=`
+  which runs the daemon's grant-graph federated search
+  ([`filestrd/src/search.rs`](filestrd/src/search.rs)) — reaching the whole
+  reachable graph via TTL forwarding, not just direct peers — and `index.search`
+  now matches the tag metadata (title/artist/album), not only the path. The
+  gateway records upstream sources so results are playable, and enriches local
+  hits with their media/thumbnail. The plugin's search now hits `/search`.
+  (Remaining: peer hits don't carry media over the search wire yet, and there
+  are still no sort options — `sorts: []`.)
 
 ---
 
@@ -151,5 +156,8 @@ daemons on localhost; run via `run-all.sh`):
   range-streamed playback through the plugin's URLs.
 - `test-media-metadata.sh` — a tagged MP3 and an MP4 (ffmpeg fixtures) surface
   their title/artist/album and duration through `/files`; an MP3 with embedded
-  cover art gets a `thumb` flag and a real image at `/thumb/{hash}`. Covers
-  **#2** and the audio half of **#3**.
+  cover art gets a `thumb` flag and a real image at `/thumb/{hash}`; `/search`
+  by artist tag finds the file. Covers **#2** and the audio half of thumbnails.
+- `test-http-search.sh` — a 3-node chain (A ← B ← G): the gateway's `/search`
+  finds a file two hops away that the one-hop `/files` browse can't, and streams
+  it (relayed). Covers federated search.

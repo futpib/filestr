@@ -100,6 +100,14 @@ async fn route(state: Arc<State>, req: Request<hyper::body::Incoming>) -> Result
     if path == "/" || path == "/files" {
         return list_files(&state, is_head).await;
     }
+    if path == "/search" {
+        let query = req
+            .uri()
+            .query()
+            .and_then(|q| url_query(q).into_iter().find(|(k, _)| k == "q").map(|(_, v)| v))
+            .unwrap_or_default();
+        return search_files(&state, &query, is_head).await;
+    }
     if path.starts_with("/grayjay") {
         let host = req
             .headers()
@@ -196,6 +204,97 @@ async fn list_files(state: &Arc<State>, is_head: bool) -> Result<Response<Body>>
                 media: e.media,
                 thumb,
             });
+        }
+    }
+
+    let files: Vec<FileItem> = by_hash.into_values().collect();
+    let json = serde_json::to_vec(&serde_json::json!({ "files": files }))?;
+    let len = json.len() as u64;
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::CONTENT_LENGTH, len)
+        .header("access-control-allow-origin", "*")
+        .body(if is_head { empty() } else { full(json) })?)
+}
+
+/// Run the daemon's federated grant-graph search and return the matches in the
+/// same JSON shape as `/files`. Unlike `/files` (local shares + a one-hop browse
+/// of direct peers), this reaches the whole reachable graph via TTL forwarding.
+/// Upstream sources are recorded so `/file/{hash}` can fetch a result; local
+/// hits are enriched with their media metadata + thumbnail.
+async fn search_files(state: &Arc<State>, query: &str, is_head: bool) -> Result<Response<Body>> {
+    use std::collections::BTreeMap;
+    let query = query.trim();
+    let mut by_hash: BTreeMap<String, FileItem> = BTreeMap::new();
+
+    if !query.is_empty() {
+        let config = state.config.read().await.clone();
+        let query_id = search::new_query_id();
+        state.seen_queries.lock().await.check_and_insert(&query_id);
+
+        // peer node-id -> friendly label, to match the `source` shown by /files
+        let labels: std::collections::HashMap<String, String> = {
+            let grants = state.grants.lock().await;
+            grants
+                .grants
+                .peers
+                .iter()
+                .filter_map(|p| p.label.clone().map(|l| (p.node_id.clone(), l)))
+                .collect()
+        };
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+        let task = tokio::spawn(search::run_search(
+            state.clone(),
+            query_id,
+            query.to_string(),
+            config.search.max_ttl,
+            search::Requester::Local,
+            tx,
+        ));
+
+        let until = tokio::time::Instant::now()
+            + std::time::Duration::from_secs(config.search.timeout_secs);
+        loop {
+            if by_hash.len() >= config.search.result_cap {
+                break;
+            }
+            let hit = match tokio::time::timeout_at(until, rx.recv()).await {
+                Ok(Some(hit)) => hit,
+                Ok(None) => break, // search completed
+                Err(_) => break,   // overall deadline
+            };
+            let search::Hit { name, size, hash, source } = hit;
+            let src = match source {
+                search::HitSource::Local => "local".to_string(),
+                search::HitSource::Upstream { peer, handle } => {
+                    state.recent_sources.lock().await.insert(
+                        &hash,
+                        SourceRef { peer: peer.clone(), handle: Some(handle), size },
+                    );
+                    labels.get(&peer).cloned().unwrap_or_else(|| short(&peer))
+                }
+            };
+            by_hash.entry(hash.clone()).or_insert_with(|| FileItem {
+                name,
+                hash,
+                size,
+                source: src,
+                media: Default::default(),
+                thumb: false,
+            });
+        }
+        task.abort();
+
+        // enrich local results with media + thumbnail (peer hits carry neither
+        // over the search wire yet)
+        let index = state.index.read().await;
+        for item in by_hash.values_mut() {
+            if let Some(f) = index.files.iter().find(|f| f.hash == item.hash) {
+                item.media = f.media.clone();
+            }
+            item.thumb = has_thumb(state, &item.hash);
         }
     }
 

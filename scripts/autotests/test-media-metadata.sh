@@ -44,6 +44,13 @@ awk -v d="$ADUR" 'BEGIN{exit !(d>1.8 && d<2.3)}' || die "mp3 duration off: $ADUR
 VDUR="$(sel clip.mp4 .media.duration_secs)"
 awk -v d="$VDUR" 'BEGIN{exit !(d>2.7 && d<3.3)}' || die "mp4 duration off: $VDUR (want ~3.0)"
 
+# --- SEARCH matches tags, not just the filename ------------------------------
+# the file is song.mp3 (no "artist" in the name), but its artist tag is "Test
+# Artist" — a federated /search for it must still find the file
+curl -s "$BASE/search?q=Test%20Artist" > "$TESTDIR/search.json"
+jq -e '.files[] | select(.name|endswith("song.mp3"))' "$TESTDIR/search.json" > /dev/null \
+    || die "search by artist tag did not find song.mp3"
+
 # --- THUMBNAIL: embedded cover art is cached and served ----------------------
 # the plain song.mp3 has no art -> no thumb flag
 [ "$(sel song.mp3 .thumb)" = "null" ] || die "song.mp3 unexpectedly has a thumb"
