@@ -75,6 +75,29 @@ Everything lives in the app sandbox:
 - `files/data`, `files/state`, cache dir — identity key, grants, blob store.
 - `files/filestrd.log` — daemon stdout/stderr, for troubleshooting.
 
+### Known limitation: sandbox-only storage (to address)
+
+Both the shared folder and the download folder live in **app-private,
+OS-managed storage** (`Context.filesDir`). This is a deliberate shortcut to get
+the daemon running without storage-permission plumbing, but it's the wrong
+end state and should be fixed:
+
+- **You can't put files in the share, or get downloads out**, with a normal
+  file manager or another app — the sandbox isn't user-browsable. Sharing
+  anything means first copying it *into* the app, and a download is stranded
+  inside the app.
+- **Uninstalling the app deletes everything** — shares, downloads, and the
+  node identity/grants — with no user-visible copy left behind.
+- **The OS can clear cache-dir contents** (the blob store lives under the cache
+  dir), so fetched blobs can vanish under storage pressure.
+
+The fix is to let the user point shares and downloads at **real, user-visible
+storage** — a `Downloads/filestr` (or user-chosen) directory via the Storage
+Access Framework / `MANAGE_EXTERNAL_STORAGE` / media APIs, with the daemon
+reading and writing there — and to keep only the identity/grants/blob-store
+metadata in the sandbox. Until then, treat this build's storage as ephemeral
+and self-contained.
+
 ## Verified end-to-end
 
 Run on an `x86_64` emulator (API 35) against a daemon on the host: the app
