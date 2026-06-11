@@ -56,5 +56,21 @@ node test/harness.js
 node test/harness.js http://127.0.0.1:21780
 ```
 
-Verified end-to-end against the filestr Android app on an emulator: the plugin
-listed and streamed a file the app served by fetching it from a peer over iroh.
+## Verified in real Grayjay
+
+Installed the official Grayjay APK (`releases.grayjay.app/app-x86_64-release.apk`)
+on an emulator, enabled Developer Mode, started the DevServer, and injected this
+plugin (`POST /plugin/loadDevPlugin`, with the script served over HTTP). In the
+actual app: the filestr source's Home feed listed the files the filestr app
+serves, and opening one **played the video** — Grayjay's player streamed it from
+`http://127.0.0.1:11780/file/{hash}`, which the filestr app fetched from a peer
+over iroh (HTTP Range → ExoPlayer seeking).
+
+### Gotchas the JS harness can't catch (only real Grayjay does)
+
+- **`allowUrls` matches the URL host only, no port.** Use `"127.0.0.1"`, not
+  `"127.0.0.1:11780"` — otherwise `http.GET` throws "non-whitelisted url".
+- **Avoid `Text` setting defaults that aren't valid JSON.** Grayjay's
+  `parseSettings` runs `JSON.parse` on every string setting value, so a default
+  like `http://127.0.0.1:11780` crashes `enable`. The gateway URL is a fixed
+  constant in the script instead.

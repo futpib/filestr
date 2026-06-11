@@ -12,16 +12,7 @@
 	"packages": ["Http"],
 	"allowEval": false,
 	"allowUrls": [
-		"127.0.0.1:11780",
-		"localhost:11780"
-	],
-	"settings": [
-		{
-			"variable": "serverUrl",
-			"name": "filestr gateway URL",
-			"description": "Base URL of the filestr app's local HTTP gateway.",
-			"type": "Text",
-			"default": "http://127.0.0.1:11780"
-		}
+		"127.0.0.1",
+		"localhost"
 	]
 }
