@@ -116,3 +116,19 @@ album-art passthrough.
 Lower priority / likely out of scope: HLS/DASH adaptive streaming &
 transcoding, subtitles / multiple audio tracks / chapters, sort options beyond
 name.
+
+## Tests
+
+User-story e2e tests live in [`scripts/autotests/`](scripts/autotests) (real
+daemons on localhost; run via `run-all.sh`):
+
+- `test-http-gateway.sh` — a player lists / HEAD-probes / range-streams a local
+  file, revalidates with the ETag (304, If-Range), gets the right content-type,
+  and fetches the embedded plugin. Covers **#1** and local range streaming.
+- `test-http-stream-peer.sh` — a player streams a 9 MiB **peer-hosted** file by
+  range through the gateway; asserts the gateway does **not** download the whole
+  file to answer a HEAD or a partial range, and that open-ended/full GETs
+  reassemble byte-identically. Covers **#4**.
+- `test-grayjay-plugin.sh` — runs the plugin's own JS harness against a live
+  gateway: media-only listing (a `.txt` is hidden), audio/video filter, and
+  range-streamed playback through the plugin's URLs.

@@ -88,3 +88,16 @@ fctl() {
 node_id() {
     fctl "$1" --json status | jq -r .endpoint_id
 }
+
+# wait_http <url> — poll until an HTTP GET succeeds (gateway comes up a moment
+# after the control socket).
+wait_http() {
+    local url="$1" i
+    for i in $(seq 1 100); do
+        if curl -sf "$url" > /dev/null 2>&1; then
+            return 0
+        fi
+        sleep 0.1
+    done
+    die "http endpoint $url never came up"
+}
