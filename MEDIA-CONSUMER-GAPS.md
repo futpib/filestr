@@ -66,11 +66,14 @@ album-art passthrough.
 
 ## 3. HTTP correctness players rely on
 
-- **No HEAD** — the gateway is GET-only; `route` returns `405` for anything
-  else ([`http_bridge.rs:77-78`](filestrd/src/http_bridge.rs)). Many players
-  `HEAD` first to probe size / type / Range support; we reject it.
-- **No `Last-Modified` / `ETag` / `If-Range`** — no validators, so no
-  client/proxy caching and no safe resume; re-opening re-streams from scratch.
+- ~~**No HEAD**~~ — **done.** Both endpoints answer HEAD (size/type/Range probe
+  with no transfer); a HEAD on `/file/{hash}` resolves the size from the local
+  store / index / a recent browse without fetching the blob.
+- ~~**No `ETag` / `If-Range`**~~ — **done.** `/file/{hash}` carries a strong
+  `ETag` (the content hash — content-addressed bytes are immutable), with
+  `If-None-Match` → `304` and `If-Range` honoured. `Last-Modified` was skipped
+  deliberately: it needs per-file mtime plumbing (part of #2) and adds nothing
+  over an immutable strong validator.
 - **Content-Type is extension-only** (`content_type()`,
   [`http_bridge.rs:332`](filestrd/src/http_bridge.rs)) with no sniffing — a
   correctly-encoded file with a missing/wrong extension becomes
@@ -103,7 +106,7 @@ album-art passthrough.
 
 | # | Item | Effort | Notes |
 |---|---|---|---|
-| 1 | `HEAD` + `Last-Modified`/`ETag` | low | self-contained; unblocks pickier players + caching |
+| 1 | ~~`HEAD` + `ETag`/`If-Range`~~ | low | **done** — self-contained; unblocks pickier players + revalidation |
 | 2 | Duration + tag-based titles in the index, surfaced in `/files` | med | biggest *visible* feed upgrade; audio easy, video needs a box parse |
 | 3 | Thumbnail / album-art endpoint | med | turns the blank wall into a real library |
 | 4 | Ranged peer fetch (true streaming) | high | the architectural fix; largest payoff for big media |
