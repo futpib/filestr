@@ -55,9 +55,8 @@ verify, with store reuse) is a later refinement.
 - ~~**Titles are raw filenames**~~ — **done.** ID3 / Vorbis / mp4 tags are read,
   and the feed shows `Artist — Title` (falling back to the filename). Search now
   matches the tag fields too, so what's shown is findable.
-- **No thumbnails / album art / poster frames** — still `Thumbnails([])`
-  everywhere; the Home feed is a wall of identical blank tiles. This is the
-  remaining half of #2 → see **#3**.
+- ~~**No thumbnails / album art**~~ — **done for audio** (see below). Video
+  poster frames still pending (need a decoder).
 - **Dates are fake** — `datetime: nowSeconds()`, so everything is "just now",
   sort-by-date is meaningless, and items reshuffle on each fetch.
 
@@ -68,6 +67,20 @@ browse wire (so peer files carry metadata too), and the gateway's `/files`.
 
 Remaining: thumbnails / album art (#3), Matroska/WebM duration, and real
 dates.
+
+### Thumbnails / album art — done for audio
+
+At index time the daemon extracts embedded cover art (`symphonia` visuals —
+front cover, else the largest image) and caches it under `cache_dir/thumbs/{hash}`.
+The gateway serves it at `GET /thumb/{hash}` (sniffed content-type, strong
+`ETag`, immutable `Cache-Control`, HEAD-aware), and `/files` carries a
+`thumb: true` flag for hashes with cached art. The plugin maps that to a Grayjay
+`Thumbnail`, so audio with embedded art shows cover tiles.
+
+Pending: **video poster frames** (need a frame decoder / ffmpeg — out of the
+pure-Rust budget for now), cover art for **peer-hosted** files (the gateway only
+caches art for its own local shares; a peer's art isn't fetched), and stale-thumb
+cleanup on rescan.
 
 ## 3. HTTP correctness players rely on
 
@@ -113,7 +126,7 @@ dates.
 |---|---|---|---|
 | 1 | ~~`HEAD` + `ETag`/`If-Range`~~ | low | **done** — self-contained; unblocks pickier players + revalidation |
 | 2 | ~~Duration + tag-based titles in the index, surfaced in `/files`~~ | med | **done** (audio + mp4 video duration; thumbnails split to #3) |
-| 3 | Thumbnail / album-art endpoint | med | **next** — turns the blank wall into a real library |
+| 3 | ~~Thumbnail / album-art endpoint~~ | med | **done** for audio (cover art → `/thumb/{hash}`); video frames pending |
 | 4 | ~~Ranged peer fetch (true streaming)~~ | high | **done** — windowed peer fetch; open-ended ranges start without staging the whole file |
 | 5 | Cache the peer-browse + paginate | med | robustness/scale for real libraries |
 
@@ -137,4 +150,6 @@ daemons on localhost; run via `run-all.sh`):
   gateway: media-only listing (a `.txt` is hidden), audio/video filter, and
   range-streamed playback through the plugin's URLs.
 - `test-media-metadata.sh` — a tagged MP3 and an MP4 (ffmpeg fixtures) surface
-  their title/artist/album and duration through `/files`. Covers **#2**.
+  their title/artist/album and duration through `/files`; an MP3 with embedded
+  cover art gets a `thumb` flag and a real image at `/thumb/{hash}`. Covers
+  **#2** and the audio half of **#3**.

@@ -80,7 +80,7 @@ source.getContentDetails = function (url) {
 	return new PlatformVideoDetails({
 		id: new PlatformID(PLATFORM, hash, PLUGIN_ID),
 		name: display,
-		thumbnails: new Thumbnails([]),
+		thumbnails: item ? thumbsFor(item) : new Thumbnails([]),
 		author: authorOf(sourceLabel),
 		datetime: nowSeconds(),
 		duration: dur,
@@ -139,7 +139,7 @@ function fileToVideo(f) {
 	return new PlatformVideo({
 		id: new PlatformID(PLATFORM, f.hash, PLUGIN_ID),
 		name: displayName(f),
-		thumbnails: new Thumbnails([]),
+		thumbnails: thumbsFor(f),
 		author: authorOf(f.source),
 		datetime: nowSeconds(),
 		duration: durationOf(f),
@@ -163,6 +163,13 @@ function displayName(f) {
 function durationOf(f) {
 	const d = f.media && f.media.duration_secs;
 	return typeof d === "number" && d > 0 ? Math.round(d) : 0;
+}
+
+// Cover-art thumbnail (served by the gateway at /thumb/{hash}) when one was
+// extracted; otherwise an empty set.
+function thumbsFor(f) {
+	if (!f.thumb) return new Thumbnails([]);
+	return new Thumbnails([new Thumbnail(`${BASE_URL}/thumb/${f.hash}`, 0)]);
 }
 
 function authorOf(sourceLabel) {

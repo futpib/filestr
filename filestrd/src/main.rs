@@ -91,7 +91,7 @@ fn load_iroh_key(data_dir: &std::path::Path, root: &RootKey) -> Result<SecretKey
 async fn reload(state: &Arc<State>) {
     match Config::load_or_default(&state.config_path) {
         Ok(config) => {
-            match index::scan(&config, &state.store).await {
+            match index::scan(&config, &state.store, &state.thumbs_dir).await {
                 Ok(new_index) => {
                     let files = new_index.files.len();
                     *state.index.write().await = new_index;
@@ -137,6 +137,9 @@ async fn main() -> Result<()> {
         .context("loading identity key")?;
     let secret_key = load_iroh_key(&data_dir, &root)?;
     let store = FsStore::load(cache_dir.join("blobs")).await.context("opening blob store")?;
+    // Regenerable cache of cover-art thumbnails, keyed by content hash.
+    let thumbs_dir = cache_dir.join("thumbs");
+    std::fs::create_dir_all(&thumbs_dir).context("creating thumbs dir")?;
 
     let relay_mode = if !config.relay_urls.is_empty() {
         // self-hosted / custom iroh relays take precedence over the preset
@@ -178,7 +181,7 @@ async fn main() -> Result<()> {
     let endpoint = builder.bind().await.context("binding iroh endpoint")?;
     tracing::info!(endpoint_id = %endpoint.id(), "endpoint bound");
 
-    let initial_index = index::scan(&config, &store).await?;
+    let initial_index = index::scan(&config, &store, &thumbs_dir).await?;
 
     let grants_path = state_dir.join("grants.json");
     // adopt grants from the pre-split location (data dir) if present
@@ -227,6 +230,7 @@ async fn main() -> Result<()> {
         grants: tokio::sync::Mutex::new(GrantStore { grants, path: grants_path }),
         endpoint: endpoint.clone(),
         store: store.clone(),
+        thumbs_dir,
         index: tokio::sync::RwLock::new(initial_index),
         handles: tokio::sync::Mutex::new(Default::default()),
         seen_queries: tokio::sync::Mutex::new(Default::default()),

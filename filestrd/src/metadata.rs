@@ -10,12 +10,20 @@ use libfilestr::ctl::MediaMeta;
 use symphonia::core::formats::probe::Hint;
 use symphonia::core::formats::{FormatOptions, TrackType};
 use symphonia::core::io::MediaSourceStream;
-use symphonia::core::meta::{MetadataOptions, StandardTag};
+use symphonia::core::meta::{MetadataOptions, StandardTag, StandardVisualKey};
 use symphonia::core::units::Timestamp;
 
-/// Extract metadata for `path`, dispatched by extension. Never fails: an
-/// unreadable or unsupported file just yields the default (empty) metadata.
-pub fn probe(path: &Path) -> MediaMeta {
+/// Result of probing a file: the tag/duration metadata plus, for audio, the
+/// embedded cover image bytes (if any), which the caller caches as a thumbnail.
+#[derive(Default)]
+pub struct Probed {
+    pub meta: MediaMeta,
+    pub cover: Option<Vec<u8>>,
+}
+
+/// Extract metadata (and cover art) for `path`, dispatched by extension. Never
+/// fails: an unreadable or unsupported file just yields empty results.
+pub fn probe(path: &Path) -> Probed {
     let ext = path
         .extension()
         .and_then(|e| e.to_str())
@@ -25,12 +33,15 @@ pub fn probe(path: &Path) -> MediaMeta {
         "mp3" | "flac" | "ogg" | "oga" | "opus" | "wav" | "m4a" | "aac" | "aiff" | "alac" => {
             probe_audio(path).unwrap_or_default()
         }
-        "mp4" | "m4v" | "mov" => probe_mp4(path).unwrap_or_default(),
-        _ => MediaMeta::default(),
+        "mp4" | "m4v" | "mov" => Probed {
+            meta: probe_mp4(path).unwrap_or_default(),
+            cover: None,
+        },
+        _ => Probed::default(),
     }
 }
 
-fn probe_audio(path: &Path) -> Option<MediaMeta> {
+fn probe_audio(path: &Path) -> Option<Probed> {
     let file = std::fs::File::open(path).ok()?;
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
     let mut hint = Hint::new();
@@ -59,9 +70,10 @@ fn probe_audio(path: &Path) -> Option<MediaMeta> {
         }
     }
 
-    // Media-level tags (ID3v2, Vorbis comments, mp4 ilst, …). The probe appends
-    // any leading/trailing metadata to the reader's log, so this is the one
-    // place to read them.
+    // Media-level tags (ID3v2, Vorbis comments, mp4 ilst, …) and visuals
+    // (embedded cover art). The probe appends any leading/trailing metadata to
+    // the reader's log, so this is the one place to read them.
+    let mut cover: Option<Vec<u8>> = None;
     let md = reader.metadata();
     if let Some(rev) = md.current() {
         for tag in &rev.media.tags {
@@ -81,9 +93,26 @@ fn probe_audio(path: &Path) -> Option<MediaMeta> {
                 _ => {}
             }
         }
+        cover = pick_cover(&rev.media.visuals);
     }
 
-    Some(meta)
+    Some(Probed { meta, cover })
+}
+
+/// Choose the best embedded image to use as a thumbnail: a front cover if one
+/// is tagged as such, otherwise the largest image (most likely the artwork).
+fn pick_cover(visuals: &[symphonia::core::meta::Visual]) -> Option<Vec<u8>> {
+    if visuals.is_empty() {
+        return None;
+    }
+    let front = visuals
+        .iter()
+        .find(|v| v.usage == Some(StandardVisualKey::FrontCover));
+    let chosen = front.or_else(|| visuals.iter().max_by_key(|v| v.data.len()))?;
+    if chosen.data.is_empty() {
+        return None;
+    }
+    Some(chosen.data.to_vec())
 }
 
 fn probe_mp4(path: &Path) -> Option<MediaMeta> {

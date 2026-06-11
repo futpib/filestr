@@ -23,6 +23,8 @@ pub struct State {
     pub grants: tokio::sync::Mutex<GrantStore>,
     pub endpoint: Endpoint,
     pub store: FsStore,
+    /// Directory holding cached thumbnails (cover art), keyed by content hash.
+    pub thumbs_dir: PathBuf,
     pub index: tokio::sync::RwLock<Index>,
     pub handles: tokio::sync::Mutex<Handles>,
     pub seen_queries: tokio::sync::Mutex<SeenQueries>,

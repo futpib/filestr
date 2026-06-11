@@ -19,6 +19,13 @@ ffmpeg -v error -f lavfi -i "sine=frequency=440:duration=2" \
     -write_xing 1 -y "$TESTDIR/A/share/song.mp3"
 ffmpeg -v error -f lavfi -i "testsrc=duration=3:size=320x240:rate=10" \
     -pix_fmt yuv420p -y "$TESTDIR/A/share/clip.mp4"
+
+# a tagged MP3 WITH embedded cover art (so the gateway caches a thumbnail)
+ffmpeg -v error -f lavfi -i "color=c=red:s=64x64:d=1" -frames:v 1 -y "$TESTDIR/cover.png"
+ffmpeg -v error -f lavfi -i "sine=frequency=330:duration=2" -i "$TESTDIR/cover.png" \
+    -map 0:a -map 1:v -c:v copy -id3v2_version 3 \
+    -metadata:s:v title="Album cover" -metadata:s:v comment="Cover (front)" \
+    -write_xing 1 -y "$TESTDIR/A/share/withcover.mp3"
 fctl A rescan > /dev/null
 
 BASE="http://127.0.0.1:$PORT"
@@ -36,5 +43,17 @@ awk -v d="$ADUR" 'BEGIN{exit !(d>1.8 && d<2.3)}' || die "mp3 duration off: $ADUR
 # --- VIDEO: duration from the mp4 container ----------------------------------
 VDUR="$(sel clip.mp4 .media.duration_secs)"
 awk -v d="$VDUR" 'BEGIN{exit !(d>2.7 && d<3.3)}' || die "mp4 duration off: $VDUR (want ~3.0)"
+
+# --- THUMBNAIL: embedded cover art is cached and served ----------------------
+# the plain song.mp3 has no art -> no thumb flag
+[ "$(sel song.mp3 .thumb)" = "null" ] || die "song.mp3 unexpectedly has a thumb"
+# the cover mp3 -> thumb flag set, and /thumb/{hash} serves a real image
+[ "$(sel withcover.mp3 .thumb)" = "true" ] || die "withcover.mp3 missing thumb flag"
+THASH="$(sel withcover.mp3 .hash)"
+TSTAT="$(curl -s "$BASE/thumb/$THASH" -o "$TESTDIR/thumb.out" -w '%{http_code}')"
+[ "$TSTAT" = 200 ] || die "/thumb status $TSTAT"
+TCT="$(curl -s -o /dev/null -w '%header{content-type}' "$BASE/thumb/$THASH")"
+case "$TCT" in image/*) ;; *) die "/thumb content-type not an image: $TCT";; esac
+[ "$(wc -c < "$TESTDIR/thumb.out")" -gt 0 ] || die "/thumb returned no bytes"
 
 echo OK

@@ -4,9 +4,10 @@
 //! the daemon exposes — its own shares plus everything reachable through its
 //! grant graph, exactly what `browse`/`get` see.
 //!
-//! Two endpoints:
-//!   GET /files            -> JSON: every servable file {name, hash, size, source}
+//! Endpoints:
+//!   GET /files            -> JSON: every servable file {name, hash, size, source, media, thumb}
 //!   GET /file/{hash}      -> the bytes, with HTTP Range support (206)
+//!   GET /thumb/{hash}     -> cached cover-art thumbnail, if any
 //!
 //! Both also answer HEAD (size/type/Range probe with no transfer), and
 //! `/file/{hash}` carries a strong `ETag` (the content hash) with conditional
@@ -48,6 +49,14 @@ struct FileItem {
     /// Media metadata (duration/tags); omitted entirely when empty.
     #[serde(skip_serializing_if = "libfilestr::ctl::MediaMeta::is_empty")]
     media: libfilestr::ctl::MediaMeta,
+    /// True when a cover-art thumbnail is cached for this hash (served at
+    /// `/thumb/{hash}`). Omitted when false.
+    #[serde(skip_serializing_if = "is_false")]
+    thumb: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 /// Run the gateway until the process exits.
@@ -100,6 +109,9 @@ async fn route(state: Arc<State>, req: Request<hyper::body::Incoming>) -> Result
             .to_string();
         return serve_grayjay(&path, &host, is_head);
     }
+    if let Some(hash) = path.strip_prefix("/thumb/") {
+        return serve_thumb(&state, hash, is_head).await;
+    }
     if let Some(hash) = path.strip_prefix("/file/") {
         let hdr = |name: header::HeaderName| {
             req.headers().get(name).and_then(|v| v.to_str().ok()).map(String::from)
@@ -141,12 +153,14 @@ async fn list_files(state: &Arc<State>, is_head: bool) -> Result<Response<Body>>
         let roots: Vec<String> =
             index.files.iter().map(|f| f.root.clone()).collect::<std::collections::BTreeSet<_>>().into_iter().collect();
         for e in index.entries(&roots) {
+            let thumb = has_thumb(state, &e.hash);
             by_hash.entry(e.hash.clone()).or_insert(FileItem {
                 name: e.path,
                 hash: e.hash,
                 size: e.size,
                 source: "local".into(),
                 media: e.media,
+                thumb,
             });
         }
     }
@@ -173,12 +187,14 @@ async fn list_files(state: &Arc<State>, is_head: bool) -> Result<Response<Body>>
             }
         }
         for e in entries {
+            let thumb = has_thumb(state, &e.hash);
             by_hash.entry(e.hash.clone()).or_insert(FileItem {
                 name: e.path,
                 hash: e.hash,
                 size: e.size,
                 source: label.clone(),
                 media: e.media,
+                thumb,
             });
         }
     }
@@ -407,6 +423,49 @@ fn stream_windowed(
         }
     };
     BodyExt::boxed_unsync(StreamBody::new(body_stream))
+}
+
+/// Whether a cover-art thumbnail is cached locally for `hash`.
+fn has_thumb(state: &Arc<State>, hash: &str) -> bool {
+    !hash.is_empty() && state.thumbs_dir.join(hash).exists()
+}
+
+/// Serve a cached cover-art thumbnail. Like the file endpoint, it carries a
+/// strong ETag (the file's content hash) and answers conditional/HEAD requests,
+/// since the artwork for a given hash never changes.
+async fn serve_thumb(state: &Arc<State>, hash: &str, is_head: bool) -> Result<Response<Body>> {
+    // guard against path traversal: the hash is the only path component
+    if hash.is_empty() || hash.contains('/') || hash.contains('.') {
+        return Ok(text(StatusCode::BAD_REQUEST, "bad hash".into()));
+    }
+    let bytes = match tokio::fs::read(state.thumbs_dir.join(hash)).await {
+        Ok(b) => b,
+        Err(_) => return Ok(text(StatusCode::NOT_FOUND, "no thumbnail".into())),
+    };
+    let len = bytes.len() as u64;
+    let ctype = sniff_image(&bytes);
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, ctype)
+        .header(header::CONTENT_LENGTH, len)
+        .header(header::ETAG, format!("\"{hash}\""))
+        .header(header::CACHE_CONTROL, "public, max-age=31536000, immutable")
+        .header("access-control-allow-origin", "*")
+        .body(if is_head { empty() } else { full(bytes) })?)
+}
+
+/// Content type of an image from its magic bytes (cover art is ~always JPEG or
+/// PNG); defaults to JPEG.
+fn sniff_image(b: &[u8]) -> &'static str {
+    if b.starts_with(&[0x89, b'P', b'N', b'G']) {
+        "image/png"
+    } else if b.starts_with(&[b'G', b'I', b'F']) {
+        "image/gif"
+    } else if b.len() >= 12 && &b[0..4] == b"RIFF" && &b[8..12] == b"WEBP" {
+        "image/webp"
+    } else {
+        "image/jpeg"
+    }
 }
 
 /// Size of `hash` from what we already know, without fetching: the local store

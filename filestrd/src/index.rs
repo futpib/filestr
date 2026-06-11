@@ -73,7 +73,7 @@ impl Index {
 /// Walk all share roots and (re)import into the blob store. Reference import
 /// means unchanged files are re-hashed but not copied; the share stays on
 /// disk where it is.
-pub async fn scan(config: &Config, store: &FsStore) -> Result<Index> {
+pub async fn scan(config: &Config, store: &FsStore, thumbs_dir: &std::path::Path) -> Result<Index> {
     let mut files = Vec::new();
     for root in &config.share {
         let base = libfilestr::paths::expand_path(&root.path);
@@ -109,18 +109,24 @@ pub async fn scan(config: &Config, store: &FsStore) -> Result<Index> {
                 .with_context(|| format!("importing {}", abs.display()))?;
             // Probe media metadata off the async runtime (it does blocking file
             // IO). Best-effort: failures yield empty metadata.
-            let media = {
+            let probed = {
                 let p = abs.clone();
                 tokio::task::spawn_blocking(move || crate::metadata::probe(&p))
                     .await
                     .unwrap_or_default()
             };
+            let hash = tag.hash.to_hex().to_string();
+            // Cache any embedded cover art as a thumbnail keyed by content hash,
+            // for the gateway's /thumb/{hash} to serve. Best-effort.
+            if let Some(cover) = probed.cover {
+                let _ = tokio::fs::write(thumbs_dir.join(&hash), &cover).await;
+            }
             files.push(IndexedFile {
                 root: root.name.clone(),
                 path: format!("{}/{}", root.name, rel),
                 size,
-                hash: tag.hash.to_hex().to_string(),
-                media,
+                hash,
+                media: probed.meta,
             });
         }
     }
