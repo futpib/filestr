@@ -125,6 +125,8 @@ async fn handle_simple(state: &Arc<State>, body: RequestBody) -> ResponseBody {
         RequestBody::PeerList => handle_peer_list(state).await,
         RequestBody::PeerRevoke { peer } => handle_revoke(state, peer).await,
         RequestBody::ShareList => handle_share_list(state).await,
+        RequestBody::ShareAdd { path, name } => handle_share_add(state, path, name).await,
+        RequestBody::ShareRemove { name } => handle_share_remove(state, name).await,
         RequestBody::Rescan => handle_rescan(state).await,
         RequestBody::Browse { peer } => handle_browse(state, peer).await,
         RequestBody::Transfers => handle_transfers(state).await,
@@ -387,6 +389,101 @@ async fn handle_share_list(state: &Arc<State>) -> Result<ResponseBody> {
         config.view.iter().map(|(name, roots)| ViewInfo { name: name.clone(), roots: roots.clone() }),
     );
     Ok(ResponseBody::Shares { files: index.files.len(), shares, views })
+}
+
+async fn handle_share_add(
+    state: &Arc<State>,
+    path: PathBuf,
+    name: Option<String>,
+) -> Result<ResponseBody> {
+    let dir = libfilestr::paths::expand_path(&path);
+    if !dir.is_dir() {
+        anyhow::bail!("not a directory: {}", dir.display());
+    }
+    let name = match name {
+        Some(n) if !n.trim().is_empty() => n,
+        _ => dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(|s| s.to_string())
+            .with_context(|| format!("cannot derive a name from {}; pass --name", dir.display()))?,
+    };
+    add_share_to_config(&state.config_path, &name, &dir)?;
+    // Validate by reloading; if the new config is rejected, roll the edit back.
+    if let Err(e) = crate::reload_config(state).await {
+        let _ = remove_share_from_config(&state.config_path, &name);
+        let _ = crate::reload_config(state).await;
+        return Err(e.context("new share rejected; reverted config"));
+    }
+    state.emit("share_added", serde_json::json!({ "name": name, "path": dir }));
+    handle_share_list(state).await
+}
+
+async fn handle_share_remove(state: &Arc<State>, name: String) -> Result<ResponseBody> {
+    remove_share_from_config(&state.config_path, &name)?;
+    crate::reload_config(state).await.context("reload after removing share")?;
+    state.emit("share_removed", serde_json::json!({ "name": name }));
+    handle_share_list(state).await
+}
+
+/// Append a `[[share]]` entry to the config file, preserving its formatting.
+fn add_share_to_config(config_path: &std::path::Path, name: &str, dir: &std::path::Path) -> Result<()> {
+    use toml_edit::{ArrayOfTables, DocumentMut, Item, Table, value};
+    let text = std::fs::read_to_string(config_path).unwrap_or_default();
+    let mut doc: DocumentMut = text.parse().context("parsing config file")?;
+    if doc.get("share").is_none() {
+        doc["share"] = Item::ArrayOfTables(ArrayOfTables::new());
+    }
+    let arr = doc["share"]
+        .as_array_of_tables_mut()
+        .context("[[share]] in config is not an array of tables")?;
+    if arr.iter().any(|t| t.get("name").and_then(|v| v.as_str()) == Some(name)) {
+        anyhow::bail!("a share named {name:?} already exists");
+    }
+    let mut t = Table::new();
+    t["name"] = value(name);
+    t["path"] = value(dir.to_string_lossy().as_ref());
+    arr.push(t);
+    write_config_atomic(config_path, &doc.to_string())
+}
+
+/// Remove a `[[share]]` entry by name, plus any `[view]` references to it.
+fn remove_share_from_config(config_path: &std::path::Path, name: &str) -> Result<()> {
+    use toml_edit::DocumentMut;
+    let text = std::fs::read_to_string(config_path)
+        .with_context(|| format!("reading {}", config_path.display()))?;
+    let mut doc: DocumentMut = text.parse().context("parsing config file")?;
+    let arr = doc
+        .get_mut("share")
+        .and_then(|i| i.as_array_of_tables_mut())
+        .context("no shares configured")?;
+    let idx = arr
+        .iter()
+        .position(|t| t.get("name").and_then(|v| v.as_str()) == Some(name))
+        .with_context(|| format!("no share named {name:?}"))?;
+    arr.remove(idx);
+    if let Some(views) = doc.get_mut("view").and_then(|i| i.as_table_mut()) {
+        for (_, item) in views.iter_mut() {
+            if let Some(a) = item.as_array_mut() {
+                a.retain(|v| v.as_str() != Some(name));
+            }
+        }
+    }
+    write_config_atomic(config_path, &doc.to_string())
+}
+
+/// Write the config via a temp file + rename so a crash can't truncate it.
+fn write_config_atomic(config_path: &std::path::Path, contents: &str) -> Result<()> {
+    if let Some(parent) = config_path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    let mut tmp = config_path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    let tmp = PathBuf::from(tmp);
+    std::fs::write(&tmp, contents).with_context(|| format!("writing {}", tmp.display()))?;
+    std::fs::rename(&tmp, config_path)
+        .with_context(|| format!("replacing {}", config_path.display()))?;
+    Ok(())
 }
 
 async fn handle_rescan(state: &Arc<State>) -> Result<ResponseBody> {

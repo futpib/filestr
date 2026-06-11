@@ -168,6 +168,19 @@ enum PeerCommand {
 enum ShareCommand {
     /// List share roots and views
     Ls,
+    /// Add a directory to the shared roots (persisted to the config file)
+    Add {
+        /// Directory to share
+        path: PathBuf,
+        /// Name for this root (default: the directory's basename)
+        #[arg(long)]
+        name: Option<String>,
+    },
+    /// Remove a share root by name
+    Rm {
+        /// Name of the share root to remove
+        name: String,
+    },
 }
 
 fn human_size(bytes: u64) -> String {
@@ -326,32 +339,40 @@ async fn run() -> Result<()> {
                 print_revoked(response, cli.json)?;
             }
         },
-        Command::Share { command } => match command {
-            ShareCommand::Ls => {
-                let response = client.roundtrip(RequestBody::ShareList).await?;
-                let ResponseBody::Shares { files, shares, views } = response else {
-                    bail!("unexpected response");
-                };
-                if cli.json {
-                    print_json(&serde_json::json!({
-                        "files": files, "shares": shares, "views": views
-                    }));
-                } else {
-                    for share in shares {
-                        println!(
-                            "{:<12} {:<6} files  {:>10}  {}",
-                            share.name,
-                            share.files,
-                            human_size(share.bytes),
-                            share.path.display()
-                        );
-                    }
-                    for view in views {
-                        println!("view {:<10} = [{}]", view.name, view.roots.join(", "));
-                    }
+        Command::Share { command } => {
+            let request = match command {
+                ShareCommand::Ls => RequestBody::ShareList,
+                ShareCommand::Add { path, name } => {
+                    // resolve relative to the CLI's CWD: the daemon runs elsewhere
+                    let abs = std::fs::canonicalize(&path)
+                        .with_context(|| format!("cannot resolve {}", path.display()))?;
+                    RequestBody::ShareAdd { path: abs, name }
+                }
+                ShareCommand::Rm { name } => RequestBody::ShareRemove { name },
+            };
+            let response = client.roundtrip(request).await?;
+            let ResponseBody::Shares { files, shares, views } = response else {
+                bail!("unexpected response");
+            };
+            if cli.json {
+                print_json(&serde_json::json!({
+                    "files": files, "shares": shares, "views": views
+                }));
+            } else {
+                for share in shares {
+                    println!(
+                        "{:<12} {:<6} files  {:>10}  {}",
+                        share.name,
+                        share.files,
+                        human_size(share.bytes),
+                        share.path.display()
+                    );
+                }
+                for view in views {
+                    println!("view {:<10} = [{}]", view.name, view.roots.join(", "));
                 }
             }
-        },
+        }
         Command::Rescan => {
             let response = client.roundtrip(RequestBody::Rescan).await?;
             let ResponseBody::Rescanned { files } = response else {

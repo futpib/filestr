@@ -54,6 +54,18 @@ pub enum RequestBody {
         peer: String,
     },
     ShareList,
+    /// Add a directory to the shared roots (persisted to the config file),
+    /// then reload + rescan. `name` defaults to the directory's basename.
+    ShareAdd {
+        path: PathBuf,
+        #[serde(default)]
+        name: Option<String>,
+    },
+    /// Remove a share root by name (and any view references), then reload +
+    /// rescan.
+    ShareRemove {
+        name: String,
+    },
     Rescan,
     /// Fetch the remote file list of a peer that granted us access.
     Browse {

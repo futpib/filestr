@@ -48,11 +48,12 @@ cargo build --workspace          # binaries: filestrd, filestrctl
 
 filestrd -v                      # foreground daemon (or use filestrd.service)
 
-# share something: ~/.config/filestr/config.toml
-#   [[share]]
-#   name = "music"
-#   path = "~/music"          # ~ and $VAR / ${VAR} are expanded
-filestrctl rescan
+# share a directory (persisted to ~/.config/filestr/config.toml, indexed now):
+filestrctl share add ~/music                  # name defaults to the basename
+filestrctl share add ~/podcasts --name pods   # …or name it
+filestrctl share ls                           # list roots + views
+filestrctl share rm pods                       # stop sharing
+# (or hand-edit the [[share]] blocks in the config and `filestrctl rescan`)
 
 filestrctl invite create --label alice    # prints a filestr1… ticket; send it
                                           # to Alice over any channel you trust

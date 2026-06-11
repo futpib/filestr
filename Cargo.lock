@@ -1369,6 +1369,7 @@ dependencies = [
  "symphonia",
  "tokio",
  "tokio-util",
+ "toml_edit 0.25.12+spec-1.1.0",
  "tracing",
  "tracing-subscriber",
  "walkdir",
@@ -5886,6 +5887,7 @@ dependencies = [
  "indexmap",
  "toml_datetime 1.1.1+spec-1.1.0",
  "toml_parser",
+ "toml_writer",
  "winnow 1.0.3",
 ]
 

@@ -88,21 +88,22 @@ fn load_iroh_key(data_dir: &std::path::Path, root: &RootKey) -> Result<SecretKey
     }
 }
 
+/// Re-read the config file and rescan shares, swapping in the new config + index
+/// on success. Returns the file count. On any error the old state is untouched.
+pub(crate) async fn reload_config(state: &Arc<State>) -> Result<usize> {
+    let config = Config::load_or_default(&state.config_path)?;
+    let new_index = index::scan(&config, &state.store, &state.thumbs_dir).await?;
+    let files = new_index.files.len();
+    *state.index.write().await = new_index;
+    *state.config.write().await = config;
+    state.emit("reloaded", serde_json::json!({ "files": files }));
+    Ok(files)
+}
+
 async fn reload(state: &Arc<State>) {
-    match Config::load_or_default(&state.config_path) {
-        Ok(config) => {
-            match index::scan(&config, &state.store, &state.thumbs_dir).await {
-                Ok(new_index) => {
-                    let files = new_index.files.len();
-                    *state.index.write().await = new_index;
-                    *state.config.write().await = config;
-                    state.emit("reloaded", serde_json::json!({ "files": files }));
-                    tracing::info!(files, "config reloaded, share rescanned");
-                }
-                Err(e) => tracing::warn!("rescan failed, keeping old index: {e:#}"),
-            }
-        }
-        Err(e) => tracing::warn!("config reload failed, keeping old config: {e}"),
+    match reload_config(state).await {
+        Ok(files) => tracing::info!(files, "config reloaded, share rescanned"),
+        Err(e) => tracing::warn!("config reload failed, keeping old state: {e:#}"),
     }
 }
 
