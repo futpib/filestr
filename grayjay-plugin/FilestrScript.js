@@ -24,17 +24,40 @@ source.searchSuggestions = function (query) {
 	return [];
 };
 
+// Filter group id and the media classes it offers. Grayjay passes the user's
+// selection back to search() as filters[MIME_FILTER] = [value, …].
+const MIME_FILTER = "mime";
+
 source.getSearchCapabilities = function () {
-	return {
-		types: [Type.Feed.Mixed],
-		sorts: [],
-		filters: [],
-	};
+	return new ResultCapabilities(
+		[Type.Feed.Mixed],
+		[],
+		[
+			new FilterGroup(
+				"Type",
+				[
+					new FilterCapability("Audio", "audio", "audio"),
+					new FilterCapability("Video", "video", "video"),
+				],
+				true, // multi-select
+				MIME_FILTER
+			),
+		]
+	);
 };
 
 source.search = function (query, type, order, filters, continuationToken) {
-	return new FilestrVideoPager(listVideos(query));
+	return new FilestrVideoPager(listVideos(query, mimeClassesFromFilters(filters)));
 };
+
+// Extract the selected media classes (e.g. ["audio"]) from Grayjay's filters
+// map. Empty/absent means no restriction.
+function mimeClassesFromFilters(filters) {
+	if (!filters) return null;
+	const sel = filters[MIME_FILTER];
+	if (!sel || !sel.length) return null;
+	return sel.map(String);
+}
 
 source.isContentDetailsUrl = function (url) {
 	return typeof url === "string" && url.indexOf("/file/") !== -1;
@@ -87,11 +110,14 @@ function fetchFiles() {
 	return data.files || [];
 }
 
-function listVideos(query) {
+function listVideos(query, mimeClasses) {
 	// Only surface files Grayjay can actually play (audio/video). Anything that
 	// maps to the generic octet-stream container (docs, archives, apks, …) is
 	// hidden — Grayjay would just fail to open it.
 	let files = fetchFiles().filter((f) => isPlayable(f.name));
+	if (mimeClasses && mimeClasses.length) {
+		files = files.filter((f) => mimeClasses.indexOf(mimeClassOf(f.name)) !== -1);
+	}
 	if (query) {
 		const terms = query.toLowerCase().split(/\s+/).filter(Boolean);
 		files = files.filter((f) => {
@@ -149,6 +175,11 @@ function baseName(path) {
 
 function isPlayable(name) {
 	return containerOf(name) !== "application/octet-stream";
+}
+
+// "audio" or "video" (or "" for non-media) from the file's container type.
+function mimeClassOf(name) {
+	return containerOf(name).split("/")[0];
 }
 
 function containerOf(name) {

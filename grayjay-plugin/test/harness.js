@@ -68,15 +68,24 @@ try {
 	out.home = { type: home.plugin_type, count: home.results.length,
 		items: home.results.map(v => ({ t: v.plugin_type, name: v.name, url: v.url, author: v.author ? v.author.name : null })) };
 
-	const search = source.search("clip", null, null, {}, null);
-	out.search = { count: search.results.length, names: search.results.map(v => v.name) };
+	// derive a query term from a real shared file so this isn't tied to fixtures:
+	// the longest alphabetic token of the first item (a discriminating substring)
+	const tokens = (home.results[0].name || "").split(/[^A-Za-z]+/).filter(t => t.length >= 3);
+	const term = tokens.sort((a, b) => b.length - a.length)[0] || "";
+	const search = source.search(term, null, null, {}, null);
+	out.search = { term: term, count: search.results.length, names: search.results.map(v => v.name) };
 
-	// pick the mp4 item from home
-	const mp4 = home.results.find(v => v.url.toLowerCase().indexOf("clip.mp4") !== -1) || home.results[0];
-	out.pickedUrl = mp4.url;
-	out.isDetailsUrl = source.isContentDetailsUrl(mp4.url);
+	// mime-type search filter: audio-only and video-only partitions
+	const audio = source.search("", null, null, { mime: ["audio"] }, null);
+	const video = source.search("", null, null, { mime: ["video"] }, null);
+	out.filter = { audio: audio.results.length, video: video.results.length };
 
-	const d = source.getContentDetails(mp4.url);
+	// pick an item from home to exercise details/streaming
+	const pick = home.results[0];
+	out.pickedUrl = pick.url;
+	out.isDetailsUrl = source.isContentDetailsUrl(pick.url);
+
+	const d = source.getContentDetails(pick.url);
 	const vs = d.video && d.video.videoSources ? d.video.videoSources : [];
 	out.details = {
 		type: d.plugin_type,
@@ -134,9 +143,14 @@ check(
 	out.home.items.map((i) => i.url).join(", ")
 );
 check(
-	"search('clip') narrows results",
+	`search('${out.search.term}') narrows results`,
 	out.search.count >= 1 && out.search.count <= out.home.count,
 	`search=${out.search.count} home=${out.home.count}`
+);
+check(
+	"mime filter partitions home into audio+video",
+	out.filter.audio + out.filter.video === out.home.count,
+	`audio=${out.filter.audio} video=${out.filter.video} home=${out.home.count}`
 );
 check("isContentDetailsUrl(true) for a file url", out.isDetailsUrl === true);
 check(
