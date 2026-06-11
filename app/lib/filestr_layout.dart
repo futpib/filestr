@@ -19,6 +19,9 @@ class FilestrLayout {
   String get logPath => '${paths.filesDir}/filestrd.log';
   String get daemonBinary => paths.daemonBinary;
 
+  /// Loopback HTTP gateway port (for a Grayjay plugin etc. on this device).
+  static const int httpPort = 11780;
+
   /// Pin every XDG root inside the app sandbox so the daemon never writes
   /// outside it.
   Map<String, String> env() => {
@@ -44,6 +47,9 @@ relay = "default"
 
 [chat]
 enabled = false
+
+[http]
+listen = "127.0.0.1:$httpPort"
 
 [[share]]
 name = "shared"

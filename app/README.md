@@ -55,6 +55,13 @@ fvm flutter build apk --debug
 # -> build/app/outputs/flutter-apk/app-debug.apk
 ```
 
+## Local HTTP gateway (Grayjay)
+
+The generated config enables the daemon's loopback HTTP gateway
+(`[http] listen = "127.0.0.1:11780"`), so other apps on the device can list and
+stream whatever this node serves. A [Grayjay](https://grayjay.app/) source
+plugin that uses it lives in [`../grayjay-plugin/`](../grayjay-plugin).
+
 ## Storage
 
 Everything lives in the app sandbox:

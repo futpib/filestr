@@ -32,6 +32,11 @@ There is also an **Android app** (files only) under [`app/`](app/): a
 Flutter/fvm front-end that bundles the iroh-only daemon and drives it over the
 same control protocol. See [app/README.md](app/README.md).
 
+The daemon can expose a read-only **loopback HTTP gateway**
+(`[http] listen = "127.0.0.1:11780"`) so other apps on the device can list and
+stream what the node serves. A [Grayjay](https://grayjay.app/) source plugin
+built on it lives under [`grayjay-plugin/`](grayjay-plugin/).
+
 See [DESIGN.md](DESIGN.md) for the protocol, [TICKETS.md](TICKETS.md) for the
 ticket/address reference, and [PLAN.md](PLAN.md) / [ROADMAP.md](ROADMAP.md)
 for the roadmap.
