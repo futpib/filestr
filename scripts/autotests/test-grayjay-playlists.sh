@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The Grayjay plugin maps shared folders to playlists/albums: getPlaylistsUser
+# The Grayjay plugin maps shared folders to playlists/albums: getUserPlaylists
 # lists this node's folders, getPlaylist resolves one to its files. Runs the
 # plugin in Grayjay's runtime against a live gateway.
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -28,7 +28,7 @@ const SC="$SCAFFOLD";
 const code=[fs.readFileSync(SC+"/polyfil.js","utf8"),fs.readFileSync(SC+"/source.js","utf8"),
   fs.readFileSync("$ROOT/grayjay-plugin/FilestrScript.js","utf8"),\`
   source.enable({id:"t"},{serverUrl:"$BASE"},null);
-  out.urls=source.getPlaylistsUser();
+  out.urls=source.getUserPlaylists();
   out.pls=out.urls.map(u=>{const p=source.getPlaylist(u);
     return {name:p.name,count:p.videoCount,isPl:source.isPlaylistUrl(u),
             firstUrl:(p.contents&&p.contents.results[0])?p.contents.results[0].url:null};});

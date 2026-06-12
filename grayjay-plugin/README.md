@@ -22,14 +22,44 @@ Grayjay (plugin)  ──HTTP/localhost──►  filestr app's [http] gateway
   `PlatformVideo` whose stream URL is `…/file/{hash}`. The gateway streams the
   bytes (fetching from a peer over iroh first if needed) with HTTP Range
   support, so Grayjay's player can seek.
+- Each peer (and this node) is a **channel**; its **Playlists tab**
+  (`getChannelPlaylists`) groups that source's files by folder, album tag and
+  artist tag, so a tagged collection browses like a music library.
 
 ## Files
 
 - `FilestrConfig.json` — plugin config. `packages: ["Http"]`,
   `allowUrls` limited to the loopback gateway, and a `serverUrl` setting
   (default `http://127.0.0.1:11780`).
-- `FilestrScript.js` — the plugin script.
+- `src/FilestrScript.ts` — **the plugin source** (TypeScript). Edit this.
+- `FilestrScript.js` — the compiled, committed artifact `filestrd` embeds
+  (`include_str!`). **Generated — don't hand-edit.**
 - `test/harness.js` — a Node test harness (see below).
+
+## Authoring (TypeScript)
+
+The plugin is written in TypeScript and type-checked against
+[`@types/grayjay-source`](https://gitlab.com/kaidelorenzo/grayjay-plugin-types)
+(the de-facto community types — more complete than the app's bundled
+`plugin.d.ts`; it declares e.g. `getChannelPlaylists`). Grayjay assigns plugin
+methods to a global `source: Source`, so type-checking turns a **misnamed
+method** — like the old `getPlaylistsUser` when Grayjay only ever calls
+`getUserPlaylists` — into a compile error instead of a method Grayjay silently
+never invokes. (That exact typo once made album/artist playlists simply not
+appear.)
+
+```sh
+cd grayjay-plugin
+npm install           # once: installs typescript + the pinned types
+npm run build         # tsc → FilestrScript.js (single classic script, no bundler)
+npm run typecheck     # tsc --noEmit, just the type check
+```
+
+`tsconfig.json` uses `module: none` + `outFile`, so the import-free source emits
+one plain script (no module preamble) — exactly what Grayjay's V8 host wants.
+After editing the `.ts`, **rebuild and commit `FilestrScript.js`** alongside it.
+`scripts/autotests/test-grayjay-typecheck.sh` enforces both that the types check
+and that the committed `.js` matches the `.ts` (no drift).
 
 ## Use it in Grayjay (plug and play)
 

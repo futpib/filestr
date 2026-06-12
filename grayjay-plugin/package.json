@@ -1,0 +1,15 @@
+{
+  "name": "filestr-grayjay-plugin",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Grayjay source plugin for filestr (authored in TypeScript, compiled to FilestrScript.js).",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "check-sync": "tsc -p tsconfig.json && git diff --exit-code -- FilestrScript.js"
+  },
+  "devDependencies": {
+    "@types/grayjay-source": "gitlab:kaidelorenzo/grayjay-plugin-types#6743b69e9b2a3afffa54cf2a9d3c46033e76021c",
+    "typescript": "^5.7.0"
+  }
+}

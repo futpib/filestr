@@ -1,0 +1,34 @@
+{
+  // The plugin is authored in TypeScript (src/FilestrScript.ts) and compiled to a
+  // single classic script, grayjay-plugin/FilestrScript.js, which filestrd embeds
+  // via include_str! (see filestrd/build.rs) and serves to Grayjay. Type-checking
+  // against @types/grayjay-source makes a misnamed source method (e.g. the old
+  // getPlaylistsUser instead of getUserPlaylists) a COMPILE ERROR rather than a
+  // silently-ignored runtime no-op.
+  //
+  // The source file has no import/export, so `module: none` + `outFile` emits one
+  // plain script (no module preamble) — exactly what Grayjay's V8 host wants. The
+  // ambient type definitions are pulled in by explicit path (the package exposes
+  // them only through an `exports` map, which classic resolution wouldn't find via
+  // the `types` array).
+  "compilerOptions": {
+    "target": "es2022",
+    "lib": ["es2022"],
+    "module": "none",
+    "outFile": "FilestrScript.js",
+    // The ambient types come in via the explicit `include` path below; disable
+    // auto-loading every node_modules/@types/* (which can't follow this package's
+    // exports-map and would error as an implicit type library).
+    "types": [],
+    "strict": true,
+    "noImplicitAny": false,
+    "removeComments": false,
+    "newLine": "lf",
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": [
+    "src/**/*.ts",
+    "node_modules/@types/grayjay-source/src/plugin.d.ts"
+  ]
+}

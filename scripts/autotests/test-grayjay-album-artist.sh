@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The plugin groups the library by embedded tags, not just folders:
-# getPlaylistsUser exposes one playlist per `album` tag and one per `artist` tag
+# getUserPlaylists exposes one playlist per `album` tag and one per `artist` tag
 # (across the whole reachable library), and getPlaylist resolves each to its
 # tracks. So a tagged collection reads like a music library regardless of how
 # it's foldered. Runs the plugin in Grayjay's runtime against a live gateway.
@@ -45,7 +45,7 @@ const SC="$SCAFFOLD";
 const code=[fs.readFileSync(SC+"/polyfil.js","utf8"),fs.readFileSync(SC+"/source.js","utf8"),
   fs.readFileSync("$ROOT/grayjay-plugin/FilestrScript.js","utf8"),\`
   source.enable({id:"t"},{serverUrl:"$BASE"},null);
-  out.pls=source.getPlaylistsUser().map(u=>{const p=source.getPlaylist(u);
+  out.pls=source.getUserPlaylists().map(u=>{const p=source.getPlaylist(u);
     return {name:p.name,count:p.videoCount,isPl:source.isPlaylistUrl(u),
             first:(p.contents&&p.contents.results[0])?p.contents.results[0].url:null};});
 \`].join("\n;\n");

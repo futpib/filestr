@@ -58,7 +58,7 @@ const SC="$SCAFFOLD";
 const code=[fs.readFileSync(SC+"/polyfil.js","utf8"),fs.readFileSync(SC+"/source.js","utf8"),
   fs.readFileSync("$ROOT/grayjay-plugin/FilestrScript.js","utf8"),\`
   source.enable({id:"t"},{serverUrl:"$BASE"},null);
-  out.subs=source.getSubscriptionsUser();
+  out.subs=source.getUserSubscriptions();
   out.desc=out.subs.length?source.getChannel(out.subs[0]).description:null;
   try { source.getChannelContents(out.subs[0],null,null,{}); out.threw=false; }
   catch(e){ out.threw=true; out.msg=String(e); }

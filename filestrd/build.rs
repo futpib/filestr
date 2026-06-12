@@ -4,6 +4,12 @@
 //! changes never reached already-installed clients. Auto-bumping it removes that
 //! footgun. Falls back to 1 when git isn't available (e.g. a crate tarball).
 //!
+//! Note: the embedded script `../grayjay-plugin/FilestrScript.js` is a generated
+//! artifact, compiled from `../grayjay-plugin/src/FilestrScript.ts` (see that
+//! crate's README / tsconfig.json). This build script embeds whatever `.js` is
+//! committed; keeping it in sync with the `.ts` is enforced by the
+//! test-grayjay-typecheck.sh autotest, not here.
+//!
 //! Two desync footguns this guards against, both of which shipped a stale
 //! version once and made a fixed plugin look unfixed in Grayjay:
 //!

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The Grayjay plugin maps peers to channels: getSubscriptionsUser lists your
+# The Grayjay plugin maps peers to channels: getUserSubscriptions lists your
 # peers as channels, and getChannel/getChannelContents browse a peer's library.
 # Runs the plugin in Grayjay's runtime against a 2-node gateway.
 #
@@ -38,7 +38,7 @@ const SC="$SCAFFOLD";
 const code=[fs.readFileSync(SC+"/polyfil.js","utf8"),fs.readFileSync(SC+"/source.js","utf8"),
   fs.readFileSync("$ROOT/grayjay-plugin/FilestrScript.js","utf8"),\`
   source.enable({id:"t"},{serverUrl:"$BASE"},null);
-  out.subs=source.getSubscriptionsUser();
+  out.subs=source.getUserSubscriptions();
   out.ch = out.subs.length ? source.getChannel(out.subs[0]) : null;
   const c = out.subs.length ? source.getChannelContents(out.subs[0],null,null,{}) : {results:[]};
   out.contentCount=c.results.length;
@@ -55,7 +55,7 @@ JS
 
 OUT="$(node "$TESTDIR/ch.js")"
 echo "plugin channels: $OUT"
-echo "$OUT" | jq -e '.subs | length >= 1' > /dev/null || die "getSubscriptionsUser returned no peer channels"
+echo "$OUT" | jq -e '.subs | length >= 1' > /dev/null || die "getUserSubscriptions returned no peer channels"
 echo "$OUT" | jq -e '.isChannelUrl == true' > /dev/null || die "isChannelUrl false for a channel url"
 echo "$OUT" | jq -e '.ch.name | length > 0' > /dev/null || die "getChannel returned no name"
 echo "$OUT" | jq -e '.contentCount == 2' > /dev/null || die "getChannelContents wrong count"

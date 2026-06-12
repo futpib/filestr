@@ -15,8 +15,9 @@ empty stub is used.
 | `searchSuggestions(query)` | titles/filenames/tags from the local index |
 | `isContentDetailsUrl` / `getContentDetails` | a file → details + `/file/{hash}` stream (duration, thumbnail, artist/album) |
 | `isChannelUrl` / `getChannel` / `getChannelContents` / `getChannelCapabilities` | **a channel = a peer** ("local" = you); contents = that source's files from `/files` |
-| `getSubscriptionsUser()` | your peers — one channel URL each |
-| `isPlaylistUrl` / `getPlaylist` / `getPlaylistsUser` | **a playlist = a shared folder** (per source); `getPlaylistsUser` lists this node's folders, `getPlaylist` resolves a `/playlist/<source>\t<folder>` URL to that folder's files |
+| `getUserSubscriptions()` | your peers — one channel URL each |
+| `getChannelPlaylists(url)` | the channel's **Playlists tab**: that source's folders + album tags + artist tags as playlist stubs (login-free; the primary way to browse) |
+| `isPlaylistUrl` / `getPlaylist` / `getUserPlaylists` | **a playlist = a folder / album tag / artist tag**; `getPlaylist` resolves a `/playlist/<kind>…` URL to its tracks, `getUserPlaylists` lists the whole library's groupings (used only by Grayjay's logged-in "Import playlists" flow) |
 
 ## Backable but not yet implemented
 
@@ -47,17 +48,34 @@ Channels are derived from the `source` field on each `/files` entry:
 
 A channel URL is `…/channel/<source>` (interpreted only by the plugin; Grayjay
 treats it as opaque). `getChannelContents` lists `/files` filtered to that
-source; `getSubscriptionsUser` returns one channel URL per peer (excluding
+source; `getUserSubscriptions` returns one channel URL per peer (excluding
 `local`). Author links on each item point at the channel, so tapping the author
 opens that peer's library. This uses the daemon's existing browse aggregation —
 no new gateway endpoint.
 
 ## Playlist model
 
-A playlist is a `(source, folder)` pair, derived from each file's visible path
-(`<root>/<rel>`): the folder is everything before the last `/`. A playlist URL is
-`…/playlist/<source>\t<folder>` (opaque to Grayjay). `getPlaylist` lists `/files`
-filtered to that source + folder; `getPlaylistsUser` returns this node's folders
-(`source == "local"`) as the user's playlists — peer folders are reached through
-that peer's channel. Same data, no new endpoint. So a shared `music/` folder
-appears as an album and `tekwars-podcast/` as a 67-track playlist.
+A playlist is a grouping of files, tagged with its `kind`. A playlist URL is
+`…/playlist/<key>` where the key is one of (`\t`-separated, opaque to Grayjay):
+
+- `folder\t<source>\t<folder>` — a shared folder of one source (the folder is
+  everything before the last `/` of a file's visible `<root>/<rel>` path);
+- `album\t<name>\t<source?>` — files whose `album` tag matches;
+- `artist\t<name>\t<source?>` — files whose `artist` tag matches.
+
+The trailing `<source>` scopes album/artist to one peer (empty = the whole
+reachable library), so the same album name from two peers stays distinct and an
+offline peer's playlist resolves to nothing rather than another peer's tracks.
+`getPlaylist` filters `/files` accordingly. Two surfaces produce these:
+
+- **`getChannelPlaylists(channelUrl)`** — a peer's (or `local`'s) folders +
+  albums + artists, all scoped to that source. This drives the **Playlists tab**
+  on the channel page, which Grayjay shows for any plugin that defines the method
+  (no login). It returns lightweight stubs (name + count + cover); Grayjay calls
+  `getPlaylist` lazily when one is opened.
+- **`getUserPlaylists()`** — the whole library's folders/albums/artists, for
+  Grayjay's "Import playlists" migration (only offered for logged-in sources, so
+  not reachable for filestr today, but kept correct).
+
+Same `/files` data, no new endpoint. So a shared `music/` folder appears as a
+folder playlist, a tagged collection as one album/artist playlist per tag.
