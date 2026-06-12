@@ -82,6 +82,25 @@ class DaemonTaskHandler extends TaskHandler {
   void onRepeatEvent(DateTime timestamp) {}
 
   @override
+  void onNotificationButtonPressed(String id) {
+    // "Stop" button on the ongoing notification: stop sharing entirely.
+    // stopService() drives onDestroy, which kills the daemon.
+    if (id == 'stop') {
+      _stopping = true;
+      FlutterForegroundTask.stopService();
+    }
+  }
+
+  @override
+  void onNotificationDismissed() {
+    // The notification is ongoing, but Android 14+ lets the user swipe it away.
+    // If that happens, stop the service instead of leaving the daemon running
+    // invisibly — dismissing the notification means "stop sharing".
+    _stopping = true;
+    FlutterForegroundTask.stopService();
+  }
+
+  @override
   Future<void> onDestroy(DateTime timestamp, bool isTimeout) async {
     _stopping = true;
     _process?.kill(ProcessSignal.sigterm);

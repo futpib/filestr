@@ -67,6 +67,12 @@ class Daemon {
         serviceTypes: const [ForegroundServiceTypes.dataSync],
         notificationTitle: 'filestr',
         notificationText: 'Starting daemon…',
+        // The notification is ongoing (can't be swiped away on most Android
+        // versions) so the daemon isn't left running invisibly; a Stop button
+        // is the explicit way to shut it down. Mirrors iroh-ssh-android.
+        notificationButtons: const [
+          NotificationButton(id: 'stop', text: 'Stop'),
+        ],
         callback: startCallback,
       );
     }
