@@ -214,8 +214,9 @@ async fn transfer(
 /// Ensure the inclusive byte range `[start, end]` of `hash` is present in the
 /// local store, fetching just that range (bao-verified) from a known source if
 /// needed. Used by the HTTP gateway to stream a file window-by-window without
-/// staging the whole blob. No transfer bookkeeping. A no-op if the whole blob
-/// is already local.
+/// staging the whole blob. No transfer bookkeeping. A no-op if the range (or the
+/// whole blob) is already local — so replays and re-seeks don't re-download
+/// ranges already fetched into the partial blob.
 #[cfg(feature = "grayjay")]
 pub(crate) async fn fetch_range(
     state: &Arc<State>,
@@ -223,11 +224,20 @@ pub(crate) async fn fetch_range(
     start: u64,
     end: u64,
 ) -> Result<()> {
+    use iroh_blobs::protocol::{ChunkRanges, ChunkRangesExt};
     let parsed: iroh_blobs::Hash = hash.parse().map_err(|e| anyhow!("bad hash {hash}: {e}"))?;
     if matches!(
         state.store.blobs().status(parsed).await?,
         iroh_blobs::api::proto::BlobStatus::Complete { .. }
     ) {
+        return Ok(());
+    }
+    // Already have this range locally (from a prior window/seek)? Don't re-fetch.
+    let want = ChunkRanges::bytes(start..=end);
+    if !want.is_empty()
+        && let Ok(bitfield) = state.store.blobs().observe(parsed).await
+        && want.is_subset(&bitfield.ranges)
+    {
         return Ok(());
     }
     let candidates = candidates(state, hash, &None).await?;

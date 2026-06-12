@@ -40,11 +40,17 @@ Verified end-to-end against a second node: a middle 100-byte range returned the
 correct bytes in ~50 ms (positioned fetch, not a 12 MB download); full GET and
 open-ended ranges reassembled to a byte-identical SHA-256.
 
-Remaining nuance (follow-up, not blocking): each window does fetch-then-emit, so
-within a window there's no overlap of transfer and delivery, and re-playing a
-peer file re-fetches windows (the partial blob isn't reused across requests
-unless the whole blob completes). True pipe-through (peer → client as bytes
-verify, with store reuse) is a later refinement.
+**Partial-blob reuse — done.** `transfers::fetch_range` now checks the store's
+bitfield (`observe`) and skips fetching a range already present in the partial
+blob, so replays and re-seeks within previously-fetched ranges serve from the
+local store with no peer round-trip (verified by `test-http-replay.sh`: kill the
+peer, the fetched range still serves, an un-fetched range doesn't).
+
+Remaining (deferred, marginal): within a *not-yet-local* window, transfer and
+delivery still don't overlap — the 4 MiB window is fetched, then emitted. True
+byte-level pipe-through (emit each chunk as bao verifies it) would cut first-byte
+latency on a fresh fetch, but the window already bounds it and players buffer, so
+it's a low-value refinement, not a correctness gap.
 
 ## 2. The feed is filenames and blank tiles  *(partly done)*
 
