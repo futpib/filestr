@@ -125,40 +125,78 @@ source.getSubscriptionsUser = function () {
 	return Object.keys(sources).map(channelUrl);
 };
 
-// --- playlists: each shared folder (per source) is a playlist/album --------
+// --- playlists: shared folders, plus tag-based albums and artists ----------
+//
+// A library browses by album and artist, not just by directory. The daemon
+// already extracts album/artist tags (they ride on /files), so we expose three
+// flavours of playlist: this node's own folders, and — across the whole
+// reachable library — one playlist per album tag and one per artist tag.
 
 source.isPlaylistUrl = function (url) {
 	return typeof url === "string" && url.indexOf("/playlist/") !== -1;
 };
 
-// This node's own folders, as the user's playlists (peer folders are reachable
-// through that peer's channel).
+function albumOf(f) {
+	return (f.media && f.media.album) || "";
+}
+
+function artistOf(f) {
+	return (f.media && f.media.artist) || "";
+}
+
 source.getPlaylistsUser = function () {
-	const seen = {};
+	const files = fetchFiles().filter(isPlayable);
 	const out = [];
-	for (const f of fetchFiles()) {
-		if (f.source !== "local" || !isPlayable(f)) continue;
-		const folder = dirOf(f.name);
-		if (!seen[folder]) {
-			seen[folder] = true;
-			out.push(playlistUrl("local", folder));
+	const seenFolder = {};
+	const seenAlbum = {};
+	const seenArtist = {};
+	for (const f of files) {
+		// this node's own folders (peer folders are reached via the peer channel)
+		if (f.source === "local") {
+			const folder = dirOf(f.name);
+			if (!seenFolder[folder]) {
+				seenFolder[folder] = true;
+				out.push(playlistUrl("folder", "local", folder));
+			}
+		}
+		// albums and artists span the whole reachable library, not just local
+		const album = albumOf(f);
+		if (album && !seenAlbum[album]) {
+			seenAlbum[album] = true;
+			out.push(playlistUrl("album", album));
+		}
+		const artist = artistOf(f);
+		if (artist && !seenArtist[artist]) {
+			seenArtist[artist] = true;
+			out.push(playlistUrl("artist", artist));
 		}
 	}
 	return out;
 };
 
 source.getPlaylist = function (url) {
-	const [src, folder] = parsePlaylistUrl(url);
-	const files = fetchFiles().filter(
-		(f) => f.source === src && isPlayable(f) && dirOf(f.name) === folder
-	);
+	const p = parsePlaylistUrl(url);
+	const all = fetchFiles().filter(isPlayable);
+	let files;
+	let name;
+	if (p.kind === "album") {
+		files = all.filter((f) => albumOf(f) === p.name);
+		name = p.name || "Album";
+	} else if (p.kind === "artist") {
+		files = all.filter((f) => artistOf(f) === p.name);
+		name = p.name || "Artist";
+	} else {
+		files = all.filter((f) => f.source === p.source && dirOf(f.name) === p.folder);
+		name = folderName(p.folder);
+	}
 	const cover = files.find((f) => f.thumb);
+	const author = authorOf(files.length ? files[0].source : "local");
 	return new PlatformPlaylistDetails({
-		id: new PlatformID(PLATFORM, `playlist:${src}/${folder}`, PLUGIN_ID),
-		name: folderName(folder),
+		id: new PlatformID(PLATFORM, `playlist:${p.kind}:${name}`, PLUGIN_ID),
+		name: name,
 		thumbnails: cover ? thumbsFor(cover) : new Thumbnails([]),
 		thumbnail: cover ? `${BASE_URL}/thumb/${cover.hash}` : "",
-		author: authorOf(src),
+		author: author,
 		datetime: nowSeconds(),
 		url: url,
 		videoCount: files.length,
@@ -337,15 +375,28 @@ function folderName(folder) {
 	return baseName(folder) || folder || "files";
 }
 
-// A playlist URL identifies a (source, folder) pair; opaque to Grayjay.
-function playlistUrl(source, folder) {
-	return `${BASE_URL}/playlist/${encodeURIComponent(source + "\t" + folder)}`;
+// A playlist URL identifies a grouping — a source's folder, an album, or an
+// artist — tagged with its kind so getPlaylist knows how to resolve it. Opaque
+// to Grayjay; interpreted only here.
+function playlistUrl(kind, a, b) {
+	const key = kind === "folder" ? `folder\t${a}\t${b}` : `${kind}\t${a}`;
+	return `${BASE_URL}/playlist/${encodeURIComponent(key)}`;
 }
 
 function parsePlaylistUrl(url) {
 	const m = /\/playlist\/([^/?#]+)/.exec(url || "");
-	const parts = (m ? decodeURIComponent(m[1]) : "local\t").split("\t");
-	return [parts[0] || "local", parts[1] || ""];
+	const parts = (m ? decodeURIComponent(m[1]) : "").split("\t");
+	switch (parts[0]) {
+		case "folder":
+			return { kind: "folder", source: parts[1] || "local", folder: parts[2] || "" };
+		case "album":
+			return { kind: "album", name: parts[1] || "" };
+		case "artist":
+			return { kind: "artist", name: parts[1] || "" };
+		default:
+			// legacy "source\tfolder" form (a playlist url cached by an older plugin)
+			return { kind: "folder", source: parts[0] || "local", folder: parts[1] || "" };
+	}
 }
 
 function contentUrl(hash, name) {

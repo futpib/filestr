@@ -115,14 +115,15 @@ cleanup on rescan.
 - ~~**Flat mixed feed, no channels/playlists**~~ — **done.** The plugin maps
   peers → channels (`getChannel` / `getChannelContents` / `getSubscriptionsUser`)
   and shared folders → playlists (`getPlaylist` / `getPlaylistsUser`).
-- **No album/artist grouping** — the daemon already extracts `album` / `artist`
-  tags (#2), but the plugin only groups by *folder* and *peer*. A music library
-  browses by **album** and **artist**, not directory. Expose albums (files
-  grouped by `album` tag) and artists (grouped by `artist` tag) as
-  playlists/channels alongside the folder playlists, so a tagged collection
-  reads like a library regardless of how it's foldered. Plugin-only; the data is
-  already in `/files`. Caveat: Grayjay plugins have no first-class artist/album
-  content type, so these map onto the existing playlist/channel types.
+- ~~**No album/artist grouping**~~ — **done.** `getPlaylistsUser` now exposes,
+  alongside this node's folder playlists, one playlist per `album` tag and one
+  per `artist` tag across the whole reachable library; `getPlaylist` resolves
+  each by tag. Playlist URLs carry a kind (`folder` / `album` / `artist`) so they
+  route correctly (legacy 2-part folder URLs still parse). Covered by
+  `test-grayjay-album-artist.sh`. (Grayjay plugins have no first-class
+  artist/album type, so both map onto the playlist type. Remaining nicety:
+  albums with the same name by different artists merge — keyed by album name
+  only.)
 - **No pagination** — `/files` returns the whole library in one response and
   `FilestrVideoPager.nextPage()` always returns `[]`; a real library is one
   giant payload.
