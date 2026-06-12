@@ -74,6 +74,8 @@ pub enum RequestBody {
     ScanPause,
     /// Resume a paused share scan.
     ScanResume,
+    /// List this node's own indexed (shared) files.
+    BrowseSelf,
     /// Fetch the remote file list of a peer that granted us access.
     Browse {
         peer: String,

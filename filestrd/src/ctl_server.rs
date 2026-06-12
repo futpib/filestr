@@ -130,6 +130,7 @@ async fn handle_simple(state: &Arc<State>, body: RequestBody) -> ResponseBody {
         RequestBody::ScanCancel => handle_scan_cancel(state).await,
         RequestBody::ScanPause => handle_scan_pause(state).await,
         RequestBody::ScanResume => handle_scan_resume(state).await,
+        RequestBody::BrowseSelf => handle_browse_self(state).await,
         RequestBody::Browse { peer } => handle_browse(state, peer).await,
         RequestBody::Transfers => handle_transfers(state).await,
         RequestBody::TransferCancel { id } => handle_transfer_cancel(state, id).await,
@@ -558,6 +559,19 @@ async fn find_peer(state: &Arc<State>, needle: &str) -> Result<PeerIn> {
         1 => Ok(matches[0].clone()),
         n => Err(anyhow!("{n} peers match {needle:?}; be more specific")),
     }
+}
+
+async fn handle_browse_self(state: &Arc<State>) -> Result<ResponseBody> {
+    let index = state.index.read().await;
+    // all of this node's own shares = every root present in the index
+    let roots: Vec<String> = index
+        .files
+        .iter()
+        .map(|f| f.root.clone())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    Ok(ResponseBody::Entries { entries: index.entries(&roots) })
 }
 
 async fn handle_browse(state: &Arc<State>, peer: String) -> Result<ResponseBody> {

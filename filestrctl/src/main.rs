@@ -51,8 +51,11 @@ enum Command {
         #[arg(long)]
         resume: bool,
     },
-    /// Fetch a peer's file list
-    Browse { peer: String },
+    /// List a peer's shared files, or your own shares if no peer is given
+    Browse {
+        /// Peer to browse (node id prefix or label); omit to list your own shares
+        peer: Option<String>,
+    },
     /// Search the grant graph; results stream in as peers answer
     Search {
         /// Search terms (AND, case-insensitive)
@@ -415,7 +418,11 @@ async fn run() -> Result<()> {
             }
         }
         Command::Browse { peer } => {
-            let response = client.roundtrip(RequestBody::Browse { peer }).await?;
+            let request = match peer {
+                Some(peer) => RequestBody::Browse { peer },
+                None => RequestBody::BrowseSelf,
+            };
+            let response = client.roundtrip(request).await?;
             let ResponseBody::Entries { entries } = response else {
                 bail!("unexpected response");
             };
