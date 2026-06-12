@@ -87,7 +87,9 @@ try {
 	out.isDetailsUrl = source.isContentDetailsUrl(pick.url);
 
 	const d = source.getContentDetails(pick.url);
-	const vs = d.video && d.video.videoSources ? d.video.videoSources : [];
+	// a playable source is either a video source or (for audio files) an audio source
+	const desc = d.video || {};
+	const vs = [].concat(desc.videoSources || [], desc.audioSources || []);
 	out.details = {
 		type: d.plugin_type,
 		name: d.name,
@@ -160,7 +162,7 @@ check(
 	out.details.type
 );
 check(
-	"details has a video source",
+	"details has a playable source",
 	out.details.sourceCount >= 1,
 	`count=${out.details.sourceCount}`
 );
