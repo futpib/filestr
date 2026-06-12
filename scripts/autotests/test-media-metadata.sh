@@ -62,5 +62,10 @@ TSTAT="$(curl -s "$BASE/thumb/$THASH" -o "$TESTDIR/thumb.out" -w '%{http_code}')
 TCT="$(curl -s -o /dev/null -w '%header{content-type}' "$BASE/thumb/$THASH")"
 case "$TCT" in image/*) ;; *) die "/thumb content-type not an image: $TCT";; esac
 [ "$(wc -c < "$TESTDIR/thumb.out")" -gt 0 ] || die "/thumb returned no bytes"
+# the thumbnail is cached on disk; removing the source prunes it on rescan
+[ -e "$TESTDIR/A/data/thumbs/$THASH" ] || die "thumbnail not cached on disk"
+rm "$TESTDIR/A/share/withcover.mp3"
+fctl A rescan > /dev/null
+[ -e "$TESTDIR/A/data/thumbs/$THASH" ] && die "stale thumbnail not pruned after removal"
 
 echo OK

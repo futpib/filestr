@@ -50,6 +50,29 @@ impl Index {
         }
     }
 
+    /// Delete cached thumbnails no longer referenced by any indexed file (their
+    /// source was removed or changed to a new hash). Best-effort.
+    pub fn prune_thumbs(&self, thumbs_dir: &std::path::Path) {
+        let keep: std::collections::HashSet<&str> =
+            self.files.iter().map(|f| f.hash.as_str()).collect();
+        let Ok(dir) = std::fs::read_dir(thumbs_dir) else {
+            return;
+        };
+        let mut removed = 0usize;
+        for entry in dir.flatten() {
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else { continue };
+            if !keep.contains(name) {
+                if std::fs::remove_file(entry.path()).is_ok() {
+                    removed += 1;
+                }
+            }
+        }
+        if removed > 0 {
+            tracing::debug!(removed, "pruned orphaned thumbnails");
+        }
+    }
+
     /// Persist the index cache via a temp file + rename. Best-effort: a failure
     /// is logged and ignored (the cache is regenerable by rescanning).
     pub fn save(&self, path: &std::path::Path) {

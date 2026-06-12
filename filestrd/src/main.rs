@@ -109,6 +109,7 @@ async fn do_scan(
     let new_index =
         index::scan(&config, &state.store, &state.thumbs_dir, &prev, &cancel, &progress).await?;
     new_index.save(&state.index_path);
+    new_index.prune_thumbs(&state.thumbs_dir);
     let files = new_index.files.len();
     *state.index.write().await = new_index;
     state.emit("reloaded", serde_json::json!({ "files": files }));
