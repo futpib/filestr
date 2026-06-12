@@ -52,11 +52,25 @@ EOF
     local i
     for i in $(seq 1 100); do
         if "$BIN/filestrctl" --socket "$dir/ctl.sock" status > /dev/null 2>&1; then
+            wait_index_settled "$dir/ctl.sock"
             return 0
         fi
         sleep 0.1
     done
     die "daemon $name did not come up"
+}
+
+# wait_index_settled <socket> — the startup scan runs in the background; wait
+# until it finishes so a freshly-started node is fully indexed (best-effort).
+wait_index_settled() {
+    local sock="$1" i
+    for i in $(seq 1 300); do
+        if "$BIN/filestrctl" --socket "$sock" --json status 2>/dev/null \
+            | jq -e '.indexing == null' > /dev/null 2>&1; then
+            return 0
+        fi
+        sleep 0.1
+    done
 }
 
 # restart_node <name> — kill and relaunch a node reusing its data/state dirs
@@ -72,6 +86,7 @@ restart_node() {
     local i
     for i in $(seq 1 100); do
         if "$BIN/filestrctl" --socket "$dir/ctl.sock" status > /dev/null 2>&1; then
+            wait_index_settled "$dir/ctl.sock"
             return 0
         fi
         sleep 0.1

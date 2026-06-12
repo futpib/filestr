@@ -430,7 +430,7 @@ async fn handle_share_add(
     // scan completes (parallel, at low CPU/IO priority — see priority.rs). The
     // scan is cancellable and its progress shows in `status`; `share rm` of this
     // share cancels it.
-    crate::spawn_rescan(state);
+    crate::spawn_rescan(state, state.index.read().await.clone());
     state.emit("share_added", serde_json::json!({ "name": name, "path": dir }));
     handle_share_list(state).await
 }

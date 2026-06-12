@@ -101,11 +101,11 @@ pub(crate) async fn apply_config(state: &Arc<State>) -> Result<()> {
 /// cancelled and monitored. Returns the file count.
 async fn do_scan(
     state: &Arc<State>,
+    prev: index::Index,
     cancel: tokio_util::sync::CancellationToken,
     progress: std::sync::Arc<crate::state::ScanProgress>,
 ) -> Result<usize> {
     let config = state.config.read().await.clone();
-    let prev = state.index.read().await.clone();
     let new_index =
         index::scan(&config, &state.store, &state.thumbs_dir, &prev, &cancel, &progress).await?;
     new_index.save(&state.index_path);
@@ -115,19 +115,22 @@ async fn do_scan(
     Ok(files)
 }
 
-/// Rescan synchronously (cancelling any in-flight scan first).
+/// Rescan synchronously (cancelling any in-flight scan first), reusing the
+/// current in-memory index for unchanged files.
 pub(crate) async fn rescan_now(state: &Arc<State>) -> Result<usize> {
     let (cancel, progress) = state.begin_scan();
-    do_scan(state, cancel, progress).await
+    let prev = state.index.read().await.clone();
+    do_scan(state, prev, cancel, progress).await
 }
 
-/// Rescan in the background — for `share add`, where hashing a big directory
-/// shouldn't block the command. Cancels any in-flight scan first.
-pub(crate) fn spawn_rescan(state: &Arc<State>) {
+/// Rescan in the background — for `share add` and startup, where hashing a big
+/// directory shouldn't block. Cancels any in-flight scan first. `prev` is the
+/// reuse baseline (the current index, or the persisted cache at startup).
+pub(crate) fn spawn_rescan(state: &Arc<State>, prev: index::Index) {
     let (cancel, progress) = state.begin_scan();
     let st = state.clone();
     tokio::spawn(async move {
-        match do_scan(&st, cancel, progress).await {
+        match do_scan(&st, prev, cancel, progress).await {
             Ok(n) => tracing::info!(files = n, "background scan complete"),
             Err(e) => tracing::info!("background scan ended: {e:#}"),
         }
@@ -247,21 +250,14 @@ async fn run(args: Args, blob_rt: tokio::runtime::Handle) -> Result<()> {
     let endpoint = builder.bind().await.context("binding iroh endpoint")?;
     tracing::info!(endpoint_id = %endpoint.id(), "endpoint bound");
 
-    // Reuse the persisted cache so unchanged files aren't re-hashed on restart.
-    // The startup scan isn't cancellable (no control socket yet); use throwaway
-    // cancel/progress handles.
+    // The persisted cache is loaded as the reuse baseline for the startup scan,
+    // but the in-memory index starts EMPTY: the daemon never serves the
+    // unverified cache, only what a completed scan produced. The startup scan
+    // runs in the background (below, once the control socket is up) so it's
+    // monitorable (`status`) and cancellable (`rescan --cancel`).
     let cached = index::Index::load(&index_path);
     tracing::debug!(cached_files = cached.files.len(), "loaded index cache");
-    let initial_index = index::scan(
-        &config,
-        &store,
-        &thumbs_dir,
-        &cached,
-        &tokio_util::sync::CancellationToken::new(),
-        &std::sync::Arc::new(state::ScanProgress::default()),
-    )
-    .await?;
-    initial_index.save(&index_path);
+    let initial_index = index::Index::default();
 
     let grants_path = state_dir.join("grants.json");
     // adopt grants from the pre-split location (data dir) if present
@@ -337,6 +333,12 @@ async fn run(args: Args, blob_rt: tokio::runtime::Handle) -> Result<()> {
     let router = Router::builder(endpoint.clone())
         .accept(libfilestr::p2p::ALPN, FilestrProtocol { state: state.clone() })
         .spawn();
+
+    // Index shares in the background, reusing the persisted cache. begin_scan
+    // (inside spawn_rescan) marks indexing active synchronously here — before
+    // the control socket is even spawned — so `status` reports it from the very
+    // first request and it can be cancelled with `rescan --cancel`.
+    spawn_rescan(&state, cached);
 
     let ctl_task = tokio::spawn(ctl_server::run(state.clone(), socket.clone()));
 
