@@ -329,6 +329,8 @@ pub(crate) async fn redeem_ticket(
                 label: peer.label.clone(),
                 allow_reshare: peer.allow_reshare,
                 added_at: peer.added_at,
+                // we just connected to redeem the invite, so it's reachable
+                reachable: Some(true),
             };
             let mut grants = state.grants.lock().await;
             grants.grants.upsert_peer(peer);
@@ -356,21 +358,40 @@ async fn handle_peer_add(
 }
 
 async fn handle_peer_list(state: &Arc<State>) -> Result<ResponseBody> {
-    let grants = state.grants.lock().await;
-    Ok(ResponseBody::Peers {
-        grants: grants.grants.grants.iter().map(invite_info).collect(),
-        peers: grants
-            .grants
-            .peers
-            .iter()
-            .map(|p| PeerInfo {
-                node_id: p.node_id.clone(),
-                label: p.label.clone(),
-                allow_reshare: p.allow_reshare,
-                added_at: p.added_at,
-            })
-            .collect(),
-    })
+    let (grant_infos, peers) = {
+        let grants = state.grants.lock().await;
+        (
+            grants.grants.grants.iter().map(invite_info).collect::<Vec<_>>(),
+            grants.grants.peers.clone(),
+        )
+    };
+    // Probe each peer concurrently so the peers screen can show online/offline.
+    // Bounded by search.connect_timeout_secs, run in parallel so the whole list
+    // is never slower than a single probe.
+    let mut probes = tokio::task::JoinSet::new();
+    for peer in peers {
+        let state = state.clone();
+        probes.spawn(async move {
+            let reachable =
+                search_mod::connect(&state, &peer, libfilestr::p2p::ALPN).await.is_ok();
+            PeerInfo {
+                node_id: peer.node_id.clone(),
+                label: peer.label.clone(),
+                allow_reshare: peer.allow_reshare,
+                added_at: peer.added_at,
+                reachable: Some(reachable),
+            }
+        });
+    }
+    let mut peer_infos = Vec::new();
+    while let Some(joined) = probes.join_next().await {
+        if let Ok(info) = joined {
+            peer_infos.push(info);
+        }
+    }
+    // probe completion order is nondeterministic; present a stable order
+    peer_infos.sort_by(|a, b| a.added_at.cmp(&b.added_at).then_with(|| a.node_id.cmp(&b.node_id)));
+    Ok(ResponseBody::Peers { grants: grant_infos, peers: peer_infos })
 }
 
 async fn handle_share_list(state: &Arc<State>) -> Result<ResponseBody> {

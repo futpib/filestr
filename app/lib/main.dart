@@ -410,13 +410,36 @@ class _PeersPageState extends State<PeersPage> {
                   final label = p['label']?.toString();
                   final shortId =
                       id.length > 16 ? '${id.substring(0, 16)}…' : id;
+                  // null = not probed/unknown, true = online, false = offline
+                  final reachable = p['reachable'] as bool?;
+                  final online = reachable == true;
+                  final offline = reachable == false;
+                  final statusColor = online
+                      ? Colors.green
+                      : (offline ? Theme.of(context).disabledColor : Colors.orange);
+                  final statusText =
+                      online ? 'Online' : (offline ? 'Offline' : 'Unknown');
                   return ListTile(
-                    leading: const Icon(Icons.computer),
+                    leading: Icon(Icons.computer,
+                        color: offline ? Theme.of(context).disabledColor : null),
                     title: Text(label ?? shortId),
-                    subtitle: Text(id,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontFamily: 'monospace')),
+                    isThreeLine: true,
+                    subtitle: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Icon(Icons.circle, size: 10, color: statusColor),
+                            const SizedBox(width: 6),
+                            Text(statusText),
+                          ],
+                        ),
+                        Text(id,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontFamily: 'monospace')),
+                      ],
+                    ),
                     trailing: const Icon(Icons.chevron_right),
                     onTap: () => Navigator.of(context).push(
                       MaterialPageRoute(

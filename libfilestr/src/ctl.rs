@@ -243,6 +243,10 @@ pub struct PeerInfo {
     /// Whether we may re-serve this peer's content (their choice, advisory).
     pub allow_reshare: bool,
     pub added_at: u64,
+    /// Whether the peer answered a connection probe just now. `None` when the
+    /// lister didn't probe, so a missing field never reads as "offline".
+    #[serde(default)]
+    pub reachable: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
