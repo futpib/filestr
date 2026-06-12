@@ -63,6 +63,44 @@ source.isContentDetailsUrl = function (url) {
 	return typeof url === "string" && url.indexOf("/file/") !== -1;
 };
 
+// --- channels: each peer (and "local" = this node) is a channel ------------
+
+source.getChannelCapabilities = function () {
+	return new ResultCapabilities([Type.Feed.Mixed], [], []);
+};
+
+source.isChannelUrl = function (url) {
+	return typeof url === "string" && url.indexOf("/channel/") !== -1;
+};
+
+source.getChannel = function (url) {
+	const src = parseChannelUrl(url);
+	const name = src === "local" ? "This node" : src;
+	return new PlatformChannel({
+		id: new PlatformID(PLATFORM, `peer:${src}`, PLUGIN_ID),
+		name: name,
+		thumbnail: "",
+		description: src === "local" ? "Files this node shares" : `Files reachable via ${src}`,
+		url: channelUrl(src),
+	});
+};
+
+source.getChannelContents = function (url, type, order, filters) {
+	const src = parseChannelUrl(url);
+	const files = fetchFiles().filter((f) => f.source === src);
+	return new FilestrVideoPager(toVideos(files, mimeClassesFromFilters(filters)));
+};
+
+// Your peers are your subscriptions: one channel per source we can serve from,
+// excluding this node itself.
+source.getSubscriptionsUser = function () {
+	const sources = {};
+	for (const f of fetchFiles()) {
+		if (f.source && f.source !== "local") sources[f.source] = true;
+	}
+	return Object.keys(sources).map(channelUrl);
+};
+
 source.getContentDetails = function (url) {
 	const { hash, name } = parseFileUrl(url);
 	// Find the matching file for accurate name/size; fall back to the URL.
@@ -180,13 +218,26 @@ function thumbsFor(f) {
 }
 
 function authorOf(sourceLabel) {
-	const label = sourceLabel || "filestr";
+	const label = sourceLabel || "local";
+	// the author link points at the source's channel, so tapping it opens that
+	// peer's (or this node's) library
 	return new PlatformAuthorLink(
 		new PlatformID(PLATFORM, `peer:${label}`, PLUGIN_ID),
-		label,
-		"",
+		label === "local" ? "This node" : label,
+		channelUrl(label),
 		""
 	);
+}
+
+// A channel URL identifies a source ("local" or a peer label). It's interpreted
+// only by this plugin; Grayjay treats it as opaque and passes it back.
+function channelUrl(source) {
+	return `${BASE_URL}/channel/${encodeURIComponent(source)}`;
+}
+
+function parseChannelUrl(url) {
+	const m = /\/channel\/([^/?#]+)/.exec(url || "");
+	return m ? decodeURIComponent(m[1]) : "local";
 }
 
 function contentUrl(hash, name) {
