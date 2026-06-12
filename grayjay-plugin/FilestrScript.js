@@ -155,6 +155,7 @@ source.getContentDetails = function (url) {
 	const sourceLabel = item ? item.source : "filestr";
 	const dur = item ? durationOf(item) : 0;
 	const fileName = item ? item.name : display;
+	const container = item ? contentType(item) : containerOf(fileName);
 
 	return new PlatformVideoDetails({
 		id: new PlatformID(PLATFORM, hash, PLUGIN_ID),
@@ -167,18 +168,27 @@ source.getContentDetails = function (url) {
 		url: contentUrl(hash, fileName),
 		isLive: false,
 		description: item ? describe(item) : "",
-		video: new VideoSourceDescriptor([
-			new VideoUrlSource({
-				name: "filestr",
-				url: contentUrl(hash, fileName),
-				container: item ? contentType(item) : containerOf(fileName),
-				duration: dur,
-				width: 0,
-				height: 0,
-			}),
-		]),
+		video: sourceDescriptor(contentUrl(hash, fileName), container, dur),
 	});
 };
+
+// Build the playback source descriptor. An audio file must be served as an
+// AudioUrlSource (in an unmuxed descriptor with no video track) — handing
+// Grayjay an audio file dressed as a VideoUrlSource makes the player ignore our
+// explicit duration and guess it from the MP3 frames, which mis-reads VBR files
+// (the "-12:-55" duration bug). We always pass the index's exact duration so the
+// seekbar is right regardless of the container's internal headers.
+function sourceDescriptor(url, container, duration) {
+	if ((container || "").split("/")[0] === "audio") {
+		return new UnMuxVideoSourceDescriptor(
+			[],
+			[new AudioUrlSource({ name: "filestr", url, container, duration })]
+		);
+	}
+	return new VideoSourceDescriptor([
+		new VideoUrlSource({ name: "filestr", url, container, duration, width: 0, height: 0 }),
+	]);
+}
 
 // --- helpers ---------------------------------------------------------------
 
