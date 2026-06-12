@@ -76,27 +76,51 @@ source.isChannelUrl = function (url) {
 source.getChannel = function (url) {
 	const src = parseChannelUrl(url);
 	const name = src === "local" ? "This node" : src;
+	let description = src === "local" ? "Files this node shares" : `Files reachable via ${src}`;
+	// flag an offline peer right in the channel header
+	if (src !== "local") {
+		const peer = fetchPeers().find((p) => p.label === src);
+		if (peer && peer.reachable === false) {
+			description = `⚠ Offline — ${src} isn't reachable right now`;
+		}
+	}
 	return new PlatformChannel({
 		id: new PlatformID(PLATFORM, `peer:${src}`, PLUGIN_ID),
 		name: name,
 		thumbnail: "",
-		description: src === "local" ? "Files this node shares" : `Files reachable via ${src}`,
+		description: description,
 		url: channelUrl(src),
 	});
 };
 
 source.getChannelContents = function (url, type, order, filters) {
 	const src = parseChannelUrl(url);
-	const files = fetchFiles().filter((f) => f.source === src);
+	const index = fetchIndex("/files");
+	// If this is a peer we couldn't reach, say so explicitly instead of showing
+	// an empty list (which reads as "this peer has no files").
+	if (src !== "local") {
+		const peer = (index.peers || []).find((p) => p.label === src);
+		if (peer && peer.reachable === false) {
+			throw new ScriptException(
+				`${src} is offline — this peer isn't reachable right now, so its files can't be loaded. It'll be available again once it's back online.`
+			);
+		}
+	}
+	const files = (index.files || []).filter((f) => f.source === src);
 	return new FilestrVideoPager(toVideos(files, mimeClassesFromFilters(filters)));
 };
 
-// Your peers are your subscriptions: one channel per source we can serve from,
-// excluding this node itself.
+// Your peers are your subscriptions: one channel per granted peer. Include peers
+// that are offline this browse too (they have no files right now) so they stay
+// visible and opening one explains that it's unreachable, rather than vanishing.
 source.getSubscriptionsUser = function () {
+	const index = fetchIndex("/files");
 	const sources = {};
-	for (const f of fetchFiles()) {
+	for (const f of index.files || []) {
 		if (f.source && f.source !== "local") sources[f.source] = true;
+	}
+	for (const p of index.peers || []) {
+		if (p.label && p.label !== "local") sources[p.label] = true;
 	}
 	return Object.keys(sources).map(channelUrl);
 };
@@ -192,17 +216,28 @@ function sourceDescriptor(url, container, duration) {
 
 // --- helpers ---------------------------------------------------------------
 
-function fetchJson(pathAndQuery) {
+// Fetch and parse a gateway listing endpoint (shape: {files, peers}). A failed
+// request almost always means the filestr app isn't running on this device, so
+// say that plainly instead of surfacing a raw HTTP status.
+function fetchIndex(pathAndQuery) {
 	const res = http.GET(`${BASE_URL}${pathAndQuery}`, {});
 	if (!res.isOk) {
-		throw new ScriptException(`filestr gateway ${res.code} at ${BASE_URL}${pathAndQuery}`);
+		throw new ScriptException(
+			"filestr isn't reachable — open the filestr app on this device and make sure it's running, then try again."
+		);
 	}
-	return JSON.parse(res.body).files || [];
+	return JSON.parse(res.body) || {};
 }
 
 // Everything this node can serve (its shares + a one-hop browse of peers).
 function fetchFiles() {
-	return fetchJson("/files");
+	return fetchIndex("/files").files || [];
+}
+
+// The granted peers and whether each answered the latest browse, so we can tell
+// an offline peer apart from one that simply has nothing to share.
+function fetchPeers() {
+	return fetchIndex("/files").peers || [];
 }
 
 // The daemon's federated grant-graph search: reaches the whole reachable graph,
@@ -210,7 +245,7 @@ function fetchFiles() {
 // just the filename. The gateway records sources so the results are playable.
 function fetchSearch(query) {
 	if (!query) return [];
-	return fetchJson(`/search?q=${encodeURIComponent(query)}`);
+	return fetchIndex(`/search?q=${encodeURIComponent(query)}`).files || [];
 }
 
 // Shared pipeline: keep only files Grayjay can play (audio/video — anything that

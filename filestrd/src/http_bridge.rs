@@ -178,6 +178,16 @@ async fn list_files(state: &Arc<State>, is_head: bool) -> Result<Response<Body>>
     // hang /files past an HTTP client's timeout). Results stay fresh: a peer that
     // misses the deadline is simply omitted from this response, never cached.
     let peers = { state.grants.lock().await.grants.peers.clone() };
+    // Reachability for this browse: every granted peer starts unreachable and
+    // flips to reachable only if its live browse answers in time. We report it
+    // alongside the files so the app and the Grayjay plugin can say "this peer
+    // is offline" instead of silently dropping it — an omitted peer is otherwise
+    // indistinguishable from a peer that simply has nothing to share.
+    let mut reach: BTreeMap<String, (String, bool)> = BTreeMap::new();
+    for peer in &peers {
+        let label = peer.label.clone().unwrap_or_else(|| short(&peer.node_id));
+        reach.insert(peer.node_id.clone(), (label, false));
+    }
     let browse_timeout =
         std::time::Duration::from_secs(state.config.read().await.search.browse_timeout_secs.max(1));
     let mut browses = tokio::task::JoinSet::new();
@@ -209,6 +219,10 @@ async fn list_files(state: &Arc<State>, is_head: bool) -> Result<Response<Body>>
                 continue;
             }
         };
+        // the browse answered: this peer is reachable for this listing
+        if let Some(s) = reach.get_mut(&node_id) {
+            s.1 = true;
+        }
         // record sources so /file/{hash} can locate them
         {
             let mut recent = state.recent_sources.lock().await;
@@ -233,7 +247,13 @@ async fn list_files(state: &Arc<State>, is_head: bool) -> Result<Response<Body>>
     }
 
     let files: Vec<FileItem> = by_hash.into_values().collect();
-    let json = serde_json::to_vec(&serde_json::json!({ "files": files }))?;
+    let peer_status: Vec<serde_json::Value> = reach
+        .into_iter()
+        .map(|(node_id, (label, reachable))| {
+            serde_json::json!({ "label": label, "node_id": node_id, "reachable": reachable })
+        })
+        .collect();
+    let json = serde_json::to_vec(&serde_json::json!({ "files": files, "peers": peer_status }))?;
     let len = json.len() as u64;
     Ok(Response::builder()
         .status(StatusCode::OK)
