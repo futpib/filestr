@@ -169,6 +169,13 @@ Contrast with the album/artist grouping in §4 (*inside* the filestr plugin),
 which is low-effort and needs no storage change but stays within Grayjay's
 plugin surface.
 
+A **no-copy alternative** to the storage refactor — exposing the whole library
+(including on-demand peer content) as a virtual filesystem via a
+`DocumentsProvider` + `StorageManager.openProxyFileDescriptor` (Android's
+app-level FUSE equivalent), which Grayjay's Directories picker accepts over SAF —
+is sketched separately in
+[`FEATURE-VIRTUAL-FILESYSTEM.md`](FEATURE-VIRTUAL-FILESYSTEM.md).
+
 ---
 
 ## Priority (impact per effort)
