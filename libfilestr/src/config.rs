@@ -157,11 +157,23 @@ pub struct SearchConfig {
     /// peer can't stall the whole listing past this — its results are simply
     /// omitted from that response (kept fresh, never cached).
     pub browse_timeout_secs: u64,
+    /// How long to wait to establish a connection to a peer before treating it
+    /// as unreachable, seconds. Kept short: a reachable peer connects in well
+    /// under a second, so a long wait here only ever delays giving up on a dead
+    /// peer — which used to stall every federated search for the full 10s.
+    pub connect_timeout_secs: u64,
 }
 
 impl Default for SearchConfig {
     fn default() -> Self {
-        Self { max_ttl: 5, fanout: 8, timeout_secs: 15, result_cap: 500, browse_timeout_secs: 4 }
+        Self {
+            max_ttl: 5,
+            fanout: 8,
+            timeout_secs: 15,
+            result_cap: 500,
+            browse_timeout_secs: 4,
+            connect_timeout_secs: 4,
+        }
     }
 }
 

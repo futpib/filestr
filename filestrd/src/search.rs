@@ -87,7 +87,13 @@ pub fn peer_addr(peer: &PeerIn) -> Result<EndpointAddr> {
 
 pub async fn connect(state: &State, peer: &PeerIn, alpn: &[u8]) -> Result<Connection> {
     let addr = peer_addr(peer)?;
-    let conn = tokio::time::timeout(Duration::from_secs(10), state.endpoint.connect(addr, alpn))
+    // Fail fast on an unreachable peer: a reachable one connects in well under a
+    // second, so a long wait here only delays giving up on a dead peer — which
+    // is exactly what used to stall every federated search (the connect, not the
+    // search itself, was the 10s hang).
+    let connect_timeout =
+        Duration::from_secs(state.config.read().await.search.connect_timeout_secs.max(1));
+    let conn = tokio::time::timeout(connect_timeout, state.endpoint.connect(addr, alpn))
         .await
         .map_err(|_| anyhow!("connect to {} timed out", peer.node_id))?
         .with_context(|| format!("connecting to {}", peer.node_id))?;
