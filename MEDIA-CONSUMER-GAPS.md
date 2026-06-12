@@ -46,11 +46,14 @@ blob, so replays and re-seeks within previously-fetched ranges serve from the
 local store with no peer round-trip (verified by `test-http-replay.sh`: kill the
 peer, the fetched range still serves, an un-fetched range doesn't).
 
-Remaining (deferred, marginal): within a *not-yet-local* window, transfer and
-delivery still don't overlap — the 4 MiB window is fetched, then emitted. True
-byte-level pipe-through (emit each chunk as bao verifies it) would cut first-byte
-latency on a fresh fetch, but the window already bounds it and players buffer, so
-it's a low-value refinement, not a correctness gap.
+**Byte-level pipe-through — done.** A not-yet-local range is now streamed as it
+arrives: one background fetch of the whole range, while the body emits the
+available contiguous prefix from the store bitfield (`observe`) as each chunk is
+bao-verified in (the prefix end is found by binary search over `is_subset`, so
+there's no manual chunk-unit math). First byte reaches the player after one
+chunk, not a whole window — measured first-byte 0.35 ms vs 134 ms total on a
+32 MB peer file, bytes identical. A client disconnect drops the body, which
+aborts the fetch.
 
 ## 2. The feed is filenames and blank tiles  *(partly done)*
 

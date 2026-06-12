@@ -471,9 +471,9 @@ async fn serve_file(
     Ok(builder.body(body)?)
 }
 
-/// Each window we fetch+serve when streaming an incomplete blob from a peer.
-/// Bounds memory and time-to-first-byte for open-ended ranges.
-const WINDOW: u64 = 4 * 1024 * 1024;
+/// Max bytes emitted per frame when piping a peer blob through — bounds the
+/// per-frame memory of `concatenate` while still yielding as data arrives.
+const MAX_EMIT: u64 = 1024 * 1024;
 
 /// Stream `[start, end_excl)` of a fully-local blob straight from the store,
 /// per leaf, clipping to the exact byte range. Zero extra buffering.
@@ -503,10 +503,12 @@ fn stream_local(state: &Arc<State>, parsed: iroh_blobs::Hash, start: u64, end_ex
     BodyExt::boxed_unsync(StreamBody::new(body_stream))
 }
 
-/// Stream `[start, end_excl)` of a not-yet-local blob by fetching it from a peer
-/// one `WINDOW`-sized chunk at a time and emitting each window as it lands. If
-/// the client disconnects (e.g. a seek), the body future is dropped and we stop
-/// fetching further windows.
+/// Stream `[start, end_excl)` of a not-yet-local blob, piping it through from a
+/// peer as it arrives: a single background fetch of the whole range, while we
+/// emit the available contiguous prefix from the store's bitfield as each chunk
+/// is bao-verified in — so the first bytes reach the player after one chunk, not
+/// a whole window. If the client disconnects (e.g. a seek), the body future
+/// drops, which cancels the fetch.
 fn stream_windowed(
     state: Arc<State>,
     parsed: iroh_blobs::Hash,
@@ -515,24 +517,91 @@ fn stream_windowed(
     end_excl: u64,
 ) -> Body {
     let body_stream = async_stream::try_stream! {
+        // one fetch of the whole range; ticks on the channel wake us to drain
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<u64>(16);
+        let fetch_state = state.clone();
+        let fetch_hash = hash.clone();
+        let _fetcher = AbortOnDrop(tokio::spawn(async move {
+            let _ = transfers::fetch_range(&fetch_state, &fetch_hash, start, end_excl - 1, &tx).await;
+        }));
+
         let mut cursor = start;
-        while cursor < end_excl {
-            let win_end_excl = (cursor + WINDOW).min(end_excl);
-            transfers::fetch_range(&state, &hash, cursor, win_end_excl - 1)
-                .await
-                .map_err(|e| std::io::Error::other(format!("fetch: {e:#}")))?;
-            let bytes = state
-                .store
-                .blobs()
-                .export_ranges(parsed, cursor..win_end_excl)
-                .concatenate()
-                .await
-                .map_err(|e| std::io::Error::other(format!("export: {e}")))?;
-            yield Frame::data(Bytes::from(bytes));
-            cursor = win_end_excl;
+        loop {
+            // how far is the contiguous, locally-present prefix from `cursor`?
+            let bitfield = state.store.blobs().observe(parsed).await
+                .map_err(|e| std::io::Error::other(format!("observe: {e}")))?;
+            let avail = available_end(&bitfield.ranges, cursor, end_excl).min(cursor + MAX_EMIT);
+            if avail > cursor {
+                let bytes = state.store.blobs().export_ranges(parsed, cursor..avail)
+                    .concatenate().await
+                    .map_err(|e| std::io::Error::other(format!("export: {e}")))?;
+                yield Frame::data(Bytes::from(bytes));
+                cursor = avail;
+                if cursor >= end_excl { break; }
+                continue;
+            }
+            // nothing new yet — wait for the fetch to make progress
+            match rx.recv().await {
+                Some(_) => continue,
+                None => {
+                    // fetch finished; one final drain of anything it left present
+                    let bitfield = state.store.blobs().observe(parsed).await
+                        .map_err(|e| std::io::Error::other(format!("observe: {e}")))?;
+                    let avail = available_end(&bitfield.ranges, cursor, end_excl);
+                    if avail > cursor {
+                        let bytes = state.store.blobs().export_ranges(parsed, cursor..avail)
+                            .concatenate().await
+                            .map_err(|e| std::io::Error::other(format!("export: {e}")))?;
+                        yield Frame::data(Bytes::from(bytes));
+                        cursor = avail;
+                    }
+                    if cursor < end_excl {
+                        Err(std::io::Error::other("fetch ended before the range was complete"))?;
+                    }
+                    break;
+                }
+            }
         }
     };
     BodyExt::boxed_unsync(StreamBody::new(body_stream))
+}
+
+/// Largest byte offset `E` in `(cursor, end_excl]` such that every chunk covering
+/// `[cursor, E)` is present in `ranges` (the store bitfield). Found by binary
+/// search over `is_subset`, so there's no manual chunk-unit arithmetic. Returns
+/// `cursor` when even the chunk at `cursor` isn't present yet.
+fn available_end(
+    ranges: &iroh_blobs::protocol::ChunkRanges,
+    cursor: u64,
+    end_excl: u64,
+) -> u64 {
+    use iroh_blobs::protocol::ChunkRangesExt;
+    if cursor >= end_excl {
+        return cursor;
+    }
+    let present = |e: u64| iroh_blobs::protocol::ChunkRanges::bytes(cursor..=e - 1).is_subset(ranges);
+    if !present(cursor + 1) {
+        return cursor;
+    }
+    let (mut lo, mut hi) = (cursor + 1, end_excl);
+    while lo < hi {
+        let mid = lo + (hi - lo).div_ceil(2);
+        if present(mid) {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    lo
+}
+
+/// Aborts the wrapped task when dropped — so a disconnected client cancels the
+/// in-flight fetch instead of leaving it running.
+struct AbortOnDrop(tokio::task::JoinHandle<()>);
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 /// Whether a cover-art thumbnail is cached locally for `hash`.

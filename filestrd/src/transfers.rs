@@ -223,6 +223,7 @@ pub(crate) async fn fetch_range(
     hash: &str,
     start: u64,
     end: u64,
+    progress: &mpsc::Sender<u64>,
 ) -> Result<()> {
     use iroh_blobs::protocol::{ChunkRanges, ChunkRangesExt};
     let parsed: iroh_blobs::Hash = hash.parse().map_err(|e| anyhow!("bad hash {hash}: {e}"))?;
@@ -244,13 +245,11 @@ pub(crate) async fn fetch_range(
     if candidates.is_empty() {
         return Err(anyhow!("no known source for {hash}; browse or search it first"));
     }
-    let (sink, mut drain) = mpsc::channel::<u64>(32);
-    let drain_task = tokio::spawn(async move { while drain.recv().await.is_some() {} });
     let range = Some((start, end));
     let mut last_error = anyhow!("no source tried");
     let mut result = Err(anyhow!("no source tried"));
     for (peer, handle) in candidates {
-        match search::fetch_source(state, &peer, handle, hash, range, &sink).await {
+        match search::fetch_source(state, &peer, handle, hash, range, progress).await {
             Ok(()) => {
                 result = Ok(());
                 break;
@@ -261,8 +260,6 @@ pub(crate) async fn fetch_range(
             }
         }
     }
-    drop(sink);
-    let _ = drain_task.await;
     result.map_err(|_: anyhow::Error| last_error.context("all sources failed"))
 }
 
