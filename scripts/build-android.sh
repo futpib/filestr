@@ -19,6 +19,15 @@ cd "$repo"
 
 : "${ANDROID_NDK_HOME:?set ANDROID_NDK_HOME to your installed NDK (e.g. ~/Android/Sdk/ndk/<ver>)}"
 
+# Force build.rs to re-run for every cross-target build. cargo keeps a SEPARATE
+# build-script cache per target triple, and that cache can go stale across
+# sessions: it reuses an old FILESTR_PLUGIN_VERSION even after HEAD has advanced,
+# so the APK ships the current plugin script under an old version number. Grayjay
+# then never re-fetches it (it only updates on a version increase), and an
+# already-fixed bug looks unfixed on the "latest APK". Touching build.rs makes
+# the version track HEAD on every build, for every ABI.
+touch "$repo/filestrd/build.rs"
+
 # Android ABI -> Rust target triple. x86_64 is for the emulator.
 declare -A targets=(
     [arm64-v8a]=aarch64-linux-android
