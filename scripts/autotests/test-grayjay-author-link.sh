@@ -36,6 +36,14 @@ const code=[fs.readFileSync(SC+"/polyfil.js","utf8"),fs.readFileSync(SC+"/source
   out.details=a(source.getContentDetails(home[0].url));
   const s=source.search("clip",null,null,[]).results;
   out.search=s.length?a(s[0]):{url:"<no hits>",ok:true};
+  // the actual "tap the channel name under a video" path: Grayjay takes the
+  // author link's url and feeds it straight back into getChannel/Contents.
+  const au=home[0].author.url;
+  const ch=source.getChannel(au);
+  const cc=source.getChannelContents(au,null,null,{});
+  out.click={resolves:source.isChannelUrl(au), name:ch?ch.name:null,
+             chUrlOk:ch?source.isChannelUrl(ch.url||""):false,
+             contents:cc&&cc.results?cc.results.length:0};
 \`].join("\n;\n");
 const out={};
 const ctx={console:{log(){}},bridge:{log(){},setTimeout,clearTimeout},
@@ -55,5 +63,15 @@ for where in home details search; do
     echo "$OUT" | jq -e ".$where.ok == true" > /dev/null \
         || die "$where author url not recognized by isChannelUrl: $URL"
 done
+
+# the full "tap the channel name" round-trip must resolve to a real channel
+echo "$OUT" | jq -e '.click.resolves == true' > /dev/null \
+    || die "tapping the channel name: author url not a channel url (the '()' bug)"
+echo "$OUT" | jq -e '.click.name | length > 0' > /dev/null \
+    || die "tapping the channel name: getChannel returned no channel"
+echo "$OUT" | jq -e '.click.chUrlOk == true' > /dev/null \
+    || die "tapping the channel name: resolved channel has no usable url"
+echo "$OUT" | jq -e '.click.contents >= 1' > /dev/null \
+    || die "tapping the channel name: channel has no contents"
 
 echo OK
