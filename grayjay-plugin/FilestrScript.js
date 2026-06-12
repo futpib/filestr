@@ -101,6 +101,47 @@ source.getSubscriptionsUser = function () {
 	return Object.keys(sources).map(channelUrl);
 };
 
+// --- playlists: each shared folder (per source) is a playlist/album --------
+
+source.isPlaylistUrl = function (url) {
+	return typeof url === "string" && url.indexOf("/playlist/") !== -1;
+};
+
+// This node's own folders, as the user's playlists (peer folders are reachable
+// through that peer's channel).
+source.getPlaylistsUser = function () {
+	const seen = {};
+	const out = [];
+	for (const f of fetchFiles()) {
+		if (f.source !== "local" || !isPlayable(f)) continue;
+		const folder = dirOf(f.name);
+		if (!seen[folder]) {
+			seen[folder] = true;
+			out.push(playlistUrl("local", folder));
+		}
+	}
+	return out;
+};
+
+source.getPlaylist = function (url) {
+	const [src, folder] = parsePlaylistUrl(url);
+	const files = fetchFiles().filter(
+		(f) => f.source === src && isPlayable(f) && dirOf(f.name) === folder
+	);
+	const cover = files.find((f) => f.thumb);
+	return new PlatformPlaylistDetails({
+		id: new PlatformID(PLATFORM, `playlist:${src}/${folder}`, PLUGIN_ID),
+		name: folderName(folder),
+		thumbnails: cover ? thumbsFor(cover) : new Thumbnails([]),
+		thumbnail: cover ? `${BASE_URL}/thumb/${cover.hash}` : "",
+		author: authorOf(src),
+		datetime: nowSeconds(),
+		url: url,
+		videoCount: files.length,
+		contents: new FilestrVideoPager(files.map(fileToVideo)),
+	});
+};
+
 source.getContentDetails = function (url) {
 	const { hash, name } = parseFileUrl(url);
 	// Find the matching file for accurate name/size; fall back to the URL.
@@ -238,6 +279,28 @@ function channelUrl(source) {
 function parseChannelUrl(url) {
 	const m = /\/channel\/([^/?#]+)/.exec(url || "");
 	return m ? decodeURIComponent(m[1]) : "local";
+}
+
+// The folder a file lives in (its visible path minus the final segment).
+function dirOf(name) {
+	const i = (name || "").lastIndexOf("/");
+	return i === -1 ? "" : name.slice(0, i);
+}
+
+// Display name of a folder/playlist: its last path segment.
+function folderName(folder) {
+	return baseName(folder) || folder || "files";
+}
+
+// A playlist URL identifies a (source, folder) pair; opaque to Grayjay.
+function playlistUrl(source, folder) {
+	return `${BASE_URL}/playlist/${encodeURIComponent(source + "\t" + folder)}`;
+}
+
+function parsePlaylistUrl(url) {
+	const m = /\/playlist\/([^/?#]+)/.exec(url || "");
+	const parts = (m ? decodeURIComponent(m[1]) : "local\t").split("\t");
+	return [parts[0] || "local", parts[1] || ""];
 }
 
 function contentUrl(hash, name) {

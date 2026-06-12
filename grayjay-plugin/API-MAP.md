@@ -16,13 +16,13 @@ empty stub is used.
 | `isContentDetailsUrl` / `getContentDetails` | a file → details + `/file/{hash}` stream (duration, thumbnail, artist/album) |
 | `isChannelUrl` / `getChannel` / `getChannelContents` / `getChannelCapabilities` | **a channel = a peer** ("local" = you); contents = that source's files from `/files` |
 | `getSubscriptionsUser()` | your peers — one channel URL each |
+| `isPlaylistUrl` / `getPlaylist` / `getPlaylistsUser` | **a playlist = a shared folder** (per source); `getPlaylistsUser` lists this node's folders, `getPlaylist` resolves a `/playlist/<source>\t<folder>` URL to that folder's files |
 
 ## Backable but not yet implemented
 
 | Method | What it'd do | filestr backing |
 |---|---|---|
 | `getSearchCapabilities().sorts` + `search` `order` | sort by name/size/duration/date | index has size/duration/mtime (needs dates surfaced) |
-| `getPlaylistsUser()` / `isPlaylistUrl` / `getPlaylist` | folders/albums as playlists | shared folder structure (currently flattened by `baseName`) |
 | `searchChannelContents(channelUrl, …)` | search within one peer | scoped browse + filter |
 | per-peer thumbnails in channel/search results | friends' cover art | needs a thumb-fetch over the p2p channel |
 
@@ -51,3 +51,13 @@ source; `getSubscriptionsUser` returns one channel URL per peer (excluding
 `local`). Author links on each item point at the channel, so tapping the author
 opens that peer's library. This uses the daemon's existing browse aggregation —
 no new gateway endpoint.
+
+## Playlist model
+
+A playlist is a `(source, folder)` pair, derived from each file's visible path
+(`<root>/<rel>`): the folder is everything before the last `/`. A playlist URL is
+`…/playlist/<source>\t<folder>` (opaque to Grayjay). `getPlaylist` lists `/files`
+filtered to that source + folder; `getPlaylistsUser` returns this node's folders
+(`source == "local"`) as the user's playlists — peer folders are reached through
+that peer's channel. Same data, no new endpoint. So a shared `music/` folder
+appears as an album and `tekwars-podcast/` as a 67-track playlist.
