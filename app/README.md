@@ -98,6 +98,12 @@ reading and writing there — and to keep only the identity/grants/blob-store
 metadata in the sandbox. Until then, treat this build's storage as ephemeral
 and self-contained.
 
+Beyond data safety, user-visible storage unlocks a consumer-UX win: a
+`Downloads/filestr` (or `Music/filestr`) folder can be added to **Grayjay's
+Library → Directories**, which then scans it into the native Artists/Albums/
+Videos library (MediaStore) — offline, native player. See
+[`MEDIA-CONSUMER-GAPS.md` §5](../MEDIA-CONSUMER-GAPS.md).
+
 ## Verified end-to-end
 
 Run on an `x86_64` emulator (API 35) against a daemon on the host: the app

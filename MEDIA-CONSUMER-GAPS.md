@@ -112,11 +112,17 @@ cleanup on rescan.
 
 ## 4. Browse structure & scale
 
-- **Flat mixed feed, no channels/playlists** — the plugin implements only
-  `getHome` / `search` / `getContentDetails`; there's no `getChannel` /
-  `getPlaylist`. Peers are the natural "channels" and shared folders the
-  natural "albums/playlists," but `baseName()` discards the directory path, so
-  all structure is lost.
+- ~~**Flat mixed feed, no channels/playlists**~~ — **done.** The plugin maps
+  peers → channels (`getChannel` / `getChannelContents` / `getSubscriptionsUser`)
+  and shared folders → playlists (`getPlaylist` / `getPlaylistsUser`).
+- **No album/artist grouping** — the daemon already extracts `album` / `artist`
+  tags (#2), but the plugin only groups by *folder* and *peer*. A music library
+  browses by **album** and **artist**, not directory. Expose albums (files
+  grouped by `album` tag) and artists (grouped by `artist` tag) as
+  playlists/channels alongside the folder playlists, so a tagged collection
+  reads like a library regardless of how it's foldered. Plugin-only; the data is
+  already in `/files`. Caveat: Grayjay plugins have no first-class artist/album
+  content type, so these map onto the existing playlist/channel types.
 - **No pagination** — `/files` returns the whole library in one response and
   `FilestrVideoPager.nextPage()` always returns `[]`; a real library is one
   giant payload.
@@ -134,6 +140,35 @@ cleanup on rescan.
   (Remaining: peer hits don't carry media over the search wire yet, and there
   are still no sort options — `sorts: []`.)
 
+## 5. Native device-library integration (Grayjay "Files" tab)
+
+Grayjay's **Library → Files** tab (Artists / Albums / Videos / Directories) is
+its built-in `LocalClient` (platform id `"LOCAL"`), backed by Android
+**MediaStore** and SAF directories — `StateLibrary.getArtists()/getAlbums()/
+getVideos()` query `MediaStore.Audio.*` / `MediaStore.Video.*` directly, and
+`addFileDirectory()` opens the SAF directory picker
+(`requestDirectoryAccess` → `takePersistableUriPermission` →
+`DocumentFile.fromTreeUri`) and scans the tree.
+
+**This tab is not plugin-extensible** — a source plugin can't inject
+Artists/Albums/Videos, and there's no plugin content type for "artist"/"album".
+So we cannot surface filestr content here through the Grayjay plugin.
+
+**The one bridge is the Directories (+) / SAF picker:** Grayjay indexes any
+folder the user grants it. So if filestr stored its shares/downloads in
+**user-visible storage** instead of app-private sandbox — the fix already
+tracked in [`app/README.md` → "Known limitation: sandbox-only storage"](app/README.md)
+— the user could add that folder once via Directories (+) and every filestr
+file would appear natively in Artists/Albums/Videos: browsable by tag, offline,
+native player, MediaStore thumbnails. This makes the sandbox-storage refactor a
+**consumer-UX win**, not only a data-safety fix.
+
+Effort: high — gated on the user-visible-storage refactor (SAF /
+`MANAGE_EXTERNAL_STORAGE` / MediaStore inserts on Android 10+, migration).
+Contrast with the album/artist grouping in §4 (*inside* the filestr plugin),
+which is low-effort and needs no storage change but stays within Grayjay's
+plugin surface.
+
 ---
 
 ## Priority (impact per effort)
@@ -145,6 +180,8 @@ cleanup on rescan.
 | 3 | ~~Thumbnail / album-art endpoint~~ | med | **done** for audio (cover art → `/thumb/{hash}`); video frames pending |
 | 4 | ~~Ranged peer fetch (true streaming)~~ | high | **done** — windowed peer fetch; open-ended ranges start without staging the whole file |
 | 5 | Cache the peer-browse + paginate | med | robustness/scale for real libraries |
+| 6 | Album/artist grouping in the plugin (by tag) | low–med | §4 — data already indexed; maps onto playlists/channels |
+| 7 | Native device-library integration via SAF directory | high | §5 — leverages Grayjay's MediaStore "Files" tab; gated on user-visible storage (app/README) |
 
 Lower priority / likely out of scope: HLS/DASH adaptive streaming &
 transcoding, subtitles / multiple audio tracks / chapters, sort options beyond
