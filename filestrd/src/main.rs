@@ -106,12 +106,23 @@ async fn do_scan(
     progress: std::sync::Arc<crate::state::ScanProgress>,
 ) -> Result<usize> {
     let config = state.config.read().await.clone();
-    let new_index =
-        index::scan(&config, &state.store, &state.thumbs_dir, &prev, &cancel, &progress).await?;
-    new_index.save(&state.index_path);
-    new_index.prune_thumbs(&state.thumbs_dir);
-    let files = new_index.files.len();
-    *state.index.write().await = new_index;
+    // scan publishes into state.index incrementally (reused files at once, then
+    // each newly hashed file as it lands) so `share add` serves as it indexes.
+    let files = index::scan(
+        &config,
+        &state.store,
+        &state.thumbs_dir,
+        &prev,
+        &cancel,
+        &progress,
+        &state.index,
+    )
+    .await?;
+    // persist the final snapshot (a cancelled scan bails above with its partial
+    // index left in place and served, but uncached — the next scan recaches it).
+    let snapshot = state.index.read().await.clone();
+    snapshot.save(&state.index_path);
+    snapshot.prune_thumbs(&state.thumbs_dir);
     state.emit("reloaded", serde_json::json!({ "files": files }));
     Ok(files)
 }

@@ -153,13 +153,14 @@ pub async fn scan(
     prev: &Index,
     cancel: &tokio_util::sync::CancellationToken,
     progress: &std::sync::Arc<crate::state::ScanProgress>,
-) -> Result<Index> {
+    live: &tokio::sync::RwLock<Index>,
+) -> Result<usize> {
     use std::sync::atomic::Ordering;
     // visible path -> previously indexed file, for the unchanged-file fast path
     let prev_by_path: HashMap<&str, &IndexedFile> =
         prev.files.iter().map(|f| (f.path.as_str(), f)).collect();
 
-    let mut files = Vec::new();
+    let mut reused_files = Vec::new();
     let mut pending: Vec<PendingFile> = Vec::new();
     let mut reused = 0usize;
     for root in &config.share {
@@ -200,7 +201,7 @@ pub async fn scan(
             if mtime != 0 {
                 if let Some(p) = prev_by_path.get(path.as_str()) {
                     if p.size == size && p.mtime == mtime {
-                        files.push(IndexedFile {
+                        reused_files.push(IndexedFile {
                             root: root.name.clone(),
                             path,
                             size,
@@ -224,81 +225,101 @@ pub async fn scan(
     let to_hash = pending.len();
     progress.total.store((reused + to_hash) as u64, Ordering::Relaxed);
     progress.done.store(reused as u64, Ordering::Relaxed);
+    // Publish the reused (unchanged) files at once so they serve immediately and
+    // any deleted ones drop, while new/changed files hash in the background and
+    // append below — `share add` serves files as each one is indexed.
+    *live.write().await = Index { files: std::mem::take(&mut reused_files) };
     let concurrency = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(4);
     let sem = std::sync::Arc::new(tokio::sync::Semaphore::new(concurrency));
     let mut set = tokio::task::JoinSet::new();
-    for p in pending {
-        // Stop launching new work once cancelled; in-flight jobs are aborted below.
-        if cancel.is_cancelled() {
+    let mut iter = pending.into_iter();
+    let mut done_launching = false;
+    // Single loop that launches hashing work AND drains finished hashes
+    // concurrently, so each file is published to the live index the moment it's
+    // hashed (incremental serving) — not after every file has been spawned.
+    // Pause stops launching but keeps draining; cancel aborts in-flight work.
+    loop {
+        if done_launching && set.is_empty() {
             break;
         }
-        let permit = sem.clone().acquire_owned().await.expect("semaphore");
-        let store = store.clone();
-        let thumbs = thumbs_dir.to_path_buf();
-        let progress = progress.clone();
-        set.spawn(async move {
-            let _permit = permit;
-            let tag = match store
-                .blobs()
-                .add_path_with_opts(AddPathOptions {
-                    path: p.abs.clone(),
-                    mode: ImportMode::TryReference,
-                    format: BlobFormat::Raw,
-                })
-                .await
-            {
-                Ok(t) => t,
-                Err(e) => {
-                    tracing::warn!("importing {}: {e:#}", p.abs.display());
-                    return None;
-                }
-            };
-            let probed = {
-                let path = p.abs.clone();
-                tokio::task::spawn_blocking(move || crate::metadata::probe(&path))
-                    .await
-                    .unwrap_or_default()
-            };
-            let hash = tag.hash.to_hex().to_string();
-            // Cache any embedded cover art as a thumbnail keyed by content hash,
-            // for the gateway's /thumb/{hash} to serve. Best-effort.
-            if let Some(cover) = probed.cover {
-                let _ = tokio::fs::write(thumbs.join(&hash), &cover).await;
-            }
-            progress.done.fetch_add(1, Ordering::Relaxed);
-            Some(IndexedFile {
-                root: p.root,
-                path: p.path,
-                size: p.size,
-                mtime: p.mtime,
-                hash,
-                media: probed.meta,
-            })
-        });
-    }
-    // Drain results; on cancellation abort the in-flight jobs and stop.
-    loop {
+        let paused = progress.paused.load(Ordering::Relaxed);
+        let can_launch = !done_launching && !paused;
         tokio::select! {
             biased;
             _ = cancel.cancelled() => {
                 set.shutdown().await;
                 break;
             }
-            res = set.join_next() => match res {
-                Some(Ok(Some(f))) => files.push(f),
-                Some(_) => {}
-                None => break,
-            },
+            // A hash finished: publish it and count it as done right away.
+            Some(res) = set.join_next(), if !set.is_empty() => {
+                if let Ok(Some(f)) = res {
+                    live.write().await.files.push(f);
+                    progress.done.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+            // A slot is free and we're allowed to launch: hash the next file.
+            permit = sem.clone().acquire_owned(), if can_launch => {
+                let permit = permit.expect("semaphore");
+                match iter.next() {
+                    None => done_launching = true,
+                    Some(p) => {
+                        let store = store.clone();
+                        let thumbs = thumbs_dir.to_path_buf();
+                        set.spawn(async move {
+                            let _permit = permit;
+                            let tag = match store
+                                .blobs()
+                                .add_path_with_opts(AddPathOptions {
+                                    path: p.abs.clone(),
+                                    mode: ImportMode::TryReference,
+                                    format: BlobFormat::Raw,
+                                })
+                                .await
+                            {
+                                Ok(t) => t,
+                                Err(e) => {
+                                    tracing::warn!("importing {}: {e:#}", p.abs.display());
+                                    return None;
+                                }
+                            };
+                            let probed = {
+                                let path = p.abs.clone();
+                                tokio::task::spawn_blocking(move || crate::metadata::probe(&path))
+                                    .await
+                                    .unwrap_or_default()
+                            };
+                            let hash = tag.hash.to_hex().to_string();
+                            // Cache any embedded cover art as a thumbnail keyed by
+                            // content hash, for the gateway's /thumb/{hash}.
+                            if let Some(cover) = probed.cover {
+                                let _ = tokio::fs::write(thumbs.join(&hash), &cover).await;
+                            }
+                            Some(IndexedFile {
+                                root: p.root,
+                                path: p.path,
+                                size: p.size,
+                                mtime: p.mtime,
+                                hash,
+                                media: probed.meta,
+                            })
+                        });
+                    }
+                }
+            }
+            // Paused with more to launch: wake when resumed (or cancelled) and
+            // re-evaluate, so we don't spin while idle.
+            _ = progress.resume.notified(), if paused && !done_launching => {}
         }
     }
     progress.active.store(false, Ordering::Relaxed);
 
     if cancel.is_cancelled() {
-        tracing::info!(reused, "share scan cancelled");
+        tracing::info!(reused, "share scan cancelled (files indexed so far stay served)");
         anyhow::bail!("scan cancelled");
     }
-    tracing::info!(files = files.len(), reused, hashed = to_hash, "share scan complete");
-    Ok(Index { files })
+    let n = live.read().await.files.len();
+    tracing::info!(files = n, reused, hashed = to_hash, "share scan complete");
+    Ok(n)
 }
 
 /// A file that needs hashing + metadata probing (new or changed since `prev`).

@@ -67,8 +67,13 @@ pub enum RequestBody {
         name: String,
     },
     Rescan,
-    /// Cancel an in-flight share scan (hashing).
+    /// Cancel an in-flight share scan (hashing). Files hashed so far stay served.
     ScanCancel,
+    /// Pause an in-flight share scan: stop launching new hashing work (in-flight
+    /// files finish), keeping what's been indexed served. Resume with ScanResume.
+    ScanPause,
+    /// Resume a paused share scan.
+    ScanResume,
     /// Fetch the remote file list of a peer that granted us access.
     Browse {
         peer: String,
@@ -214,6 +219,9 @@ pub struct DaemonStatus {
 pub struct IndexProgress {
     pub done: u64,
     pub total: u64,
+    /// True while the scan is paused (no new files being hashed).
+    #[serde(default)]
+    pub paused: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

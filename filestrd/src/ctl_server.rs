@@ -128,6 +128,8 @@ async fn handle_simple(state: &Arc<State>, body: RequestBody) -> ResponseBody {
         RequestBody::ShareRemove { name } => handle_share_remove(state, name).await,
         RequestBody::Rescan => handle_rescan(state).await,
         RequestBody::ScanCancel => handle_scan_cancel(state).await,
+        RequestBody::ScanPause => handle_scan_pause(state).await,
+        RequestBody::ScanResume => handle_scan_resume(state).await,
         RequestBody::Browse { peer } => handle_browse(state, peer).await,
         RequestBody::Transfers => handle_transfers(state).await,
         RequestBody::TransferCancel { id } => handle_transfer_cancel(state, id).await,
@@ -180,7 +182,7 @@ async fn handle_status(state: &Arc<State>) -> Result<ResponseBody> {
             version: VERSION.to_string(),
             indexing: state
                 .scan_progress()
-                .map(|(done, total)| IndexProgress { done, total }),
+                .map(|(done, total, paused)| IndexProgress { done, total, paused }),
         },
     })
 }
@@ -188,6 +190,18 @@ async fn handle_status(state: &Arc<State>) -> Result<ResponseBody> {
 async fn handle_scan_cancel(state: &Arc<State>) -> Result<ResponseBody> {
     let cancelled = state.cancel_scan();
     state.emit("scan_cancelled", serde_json::json!({ "cancelled": cancelled }));
+    Ok(ResponseBody::Rescanned { files: state.index.read().await.files.len() })
+}
+
+async fn handle_scan_pause(state: &Arc<State>) -> Result<ResponseBody> {
+    let paused = state.pause_scan();
+    state.emit("scan_paused", serde_json::json!({ "paused": paused }));
+    Ok(ResponseBody::Rescanned { files: state.index.read().await.files.len() })
+}
+
+async fn handle_scan_resume(state: &Arc<State>) -> Result<ResponseBody> {
+    let resumed = state.resume_scan();
+    state.emit("scan_resumed", serde_json::json!({ "resumed": resumed }));
     Ok(ResponseBody::Rescanned { files: state.index.read().await.files.len() })
 }
 

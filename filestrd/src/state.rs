@@ -63,8 +63,11 @@ pub struct ScanCtl {
 #[derive(Default)]
 pub struct ScanProgress {
     pub active: AtomicBool,
+    pub paused: AtomicBool,
     pub done: AtomicU64,
     pub total: AtomicU64,
+    /// Notified when the scan is un-paused, to wake the paused launch loop.
+    pub resume: tokio::sync::Notify,
 }
 
 impl State {
@@ -92,17 +95,48 @@ impl State {
         match &ctl.cancel {
             Some(token) => {
                 token.cancel();
+                // wake a paused scan so it observes the cancel and unwinds
+                ctl.progress.resume.notify_waiters();
                 true
             }
             None => false,
         }
     }
 
-    /// Snapshot scan progress (done, total) if a scan is currently active.
-    pub fn scan_progress(&self) -> Option<(u64, u64)> {
+    /// Pause the in-flight scan (if any and not already paused).
+    pub fn pause_scan(&self) -> bool {
+        let ctl = self.scan.lock().unwrap();
+        let p = &ctl.progress;
+        if p.active.load(Ordering::Relaxed) && !p.paused.load(Ordering::Relaxed) {
+            p.paused.store(true, Ordering::Relaxed);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Resume a paused scan (if any).
+    pub fn resume_scan(&self) -> bool {
+        let ctl = self.scan.lock().unwrap();
+        let p = &ctl.progress;
+        if p.active.load(Ordering::Relaxed) && p.paused.load(Ordering::Relaxed) {
+            p.paused.store(false, Ordering::Relaxed);
+            p.resume.notify_waiters();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Snapshot scan progress (done, total, paused) if a scan is currently active.
+    pub fn scan_progress(&self) -> Option<(u64, u64, bool)> {
         let p = self.scan.lock().unwrap().progress.clone();
         if p.active.load(Ordering::Relaxed) {
-            Some((p.done.load(Ordering::Relaxed), p.total.load(Ordering::Relaxed)))
+            Some((
+                p.done.load(Ordering::Relaxed),
+                p.total.load(Ordering::Relaxed),
+                p.paused.load(Ordering::Relaxed),
+            ))
         } else {
             None
         }

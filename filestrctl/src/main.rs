@@ -39,11 +39,17 @@ enum Command {
         #[command(subcommand)]
         command: ShareCommand,
     },
-    /// Rescan share roots (or cancel an in-flight scan with --cancel)
+    /// Rescan share roots, or control an in-flight scan (--cancel/--pause/--resume)
     Rescan {
-        /// Cancel a scan that's currently hashing, instead of starting one
-        #[arg(long)]
+        /// Cancel a scan that's currently hashing (files indexed so far stay served)
+        #[arg(long, conflicts_with_all = ["pause", "resume"])]
         cancel: bool,
+        /// Pause an in-flight scan (stop hashing new files; keep what's indexed)
+        #[arg(long, conflicts_with = "resume")]
+        pause: bool,
+        /// Resume a paused scan
+        #[arg(long)]
+        resume: bool,
     },
     /// Fetch a peer's file list
     Browse { peer: String },
@@ -241,7 +247,8 @@ async fn run() -> Result<()> {
                 println!("shared files:  {}", status.files);
                 if let Some(p) = &status.indexing {
                     let pct = if p.total > 0 { p.done * 100 / p.total } else { 0 };
-                    println!("indexing:      {}/{} ({}%)", p.done, p.total, pct);
+                    let paused = if p.paused { " — paused" } else { "" };
+                    println!("indexing:      {}/{} ({}%){}", p.done, p.total, pct, paused);
                 }
                 println!(
                     "grants:        {} active, {} issued",
@@ -381,8 +388,16 @@ async fn run() -> Result<()> {
                 }
             }
         }
-        Command::Rescan { cancel } => {
-            let request = if cancel { RequestBody::ScanCancel } else { RequestBody::Rescan };
+        Command::Rescan { cancel, pause, resume } => {
+            let request = if cancel {
+                RequestBody::ScanCancel
+            } else if pause {
+                RequestBody::ScanPause
+            } else if resume {
+                RequestBody::ScanResume
+            } else {
+                RequestBody::Rescan
+            };
             let response = client.roundtrip(request).await?;
             let ResponseBody::Rescanned { files } = response else {
                 bail!("unexpected response");
@@ -391,6 +406,10 @@ async fn run() -> Result<()> {
                 print_json(&serde_json::json!({ "files": files }));
             } else if cancel {
                 println!("scan cancelled ({files} files indexed)");
+            } else if pause {
+                println!("scan paused ({files} files indexed)");
+            } else if resume {
+                println!("scan resumed ({files} files indexed)");
             } else {
                 println!("rescanned: {files} files");
             }
