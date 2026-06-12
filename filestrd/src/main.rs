@@ -151,6 +151,21 @@ async fn reload(state: &Arc<State>) {
 }
 
 fn main() -> Result<()> {
+    // On Android the daemon is a plain child of the app's foreground-service
+    // process. If that process is force-stopped or crashes, the kernel reparents
+    // us to init (PID 1) instead of killing us — so we keep holding the gateway
+    // port. The next launch then can't bind it ("Address already in use"), its
+    // gateway never comes up, and the orphaned old daemon keeps serving a stale
+    // plugin. Tie our lifetime to the parent: ask the kernel to SIGKILL us the
+    // instant it dies, and bail if it already died before we got here.
+    #[cfg(target_os = "android")]
+    unsafe {
+        libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL as libc::c_ulong, 0, 0, 0);
+        if libc::getppid() == 1 {
+            std::process::exit(0);
+        }
+    }
+
     let args = Args::parse();
     init_tracing(args.verbose);
     // A dedicated low-priority runtime hosts the blob store, so share hashing and
@@ -353,8 +368,14 @@ async fn run(args: Args, blob_rt: tokio::runtime::Handle) -> Result<()> {
                 Ok(sa) => {
                     let s = state.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = http_bridge::serve(s, sa).await {
+                        if let Err(e) = http_bridge::serve(s.clone(), sa).await {
                             tracing::error!("http gateway stopped: {e:#}");
+                            // The loopback gateway is the daemon's whole reason to
+                            // run on Android. Don't linger alive-but-gateway-less
+                            // (that's exactly the state where a stale instance keeps
+                            // answering): shut down so the supervisor restarts us,
+                            // by which point PDEATHSIG has freed the port.
+                            s.shutdown.cancel();
                         }
                     });
                 }
