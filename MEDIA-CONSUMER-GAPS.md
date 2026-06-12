@@ -92,11 +92,13 @@ cleanup on rescan.
   `If-None-Match` → `304` and `If-Range` honoured. `Last-Modified` was skipped
   deliberately: it needs per-file mtime plumbing (part of #2) and adds nothing
   over an immutable strong validator.
-- **Content-Type is extension-only** (`content_type()`,
-  [`http_bridge.rs:332`](filestrd/src/http_bridge.rs)) with no sniffing — a
-  correctly-encoded file with a missing/wrong extension becomes
-  `application/octet-stream` and won't play (and the plugin hides it from the
-  list entirely via `isPlayable`).
+- ~~**Content-Type is extension-only**~~ — **done.** The content type is sniffed
+  from magic bytes at index time (`metadata::sniff_content_type`), stored in
+  `MediaMeta.content_type`, and used by the gateway (serving) and the plugin
+  (listing/playability). A media file with a missing/wrong extension is now
+  detected, listed, and served correctly. (Remaining duration gap: mkv/webm
+  duration isn't reliably populated by symphonia, and CBR MP3 without a Xing
+  header still reports none.)
 - **No `Content-Disposition`** — no filename hint for a "download" action.
 
 ## 4. Browse structure & scale

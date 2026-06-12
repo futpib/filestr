@@ -44,6 +44,18 @@ awk -v d="$ADUR" 'BEGIN{exit !(d>1.8 && d<2.3)}' || die "mp3 duration off: $ADUR
 VDUR="$(sel clip.mp4 .media.duration_secs)"
 awk -v d="$VDUR" 'BEGIN{exit !(d>2.7 && d<3.3)}' || die "mp4 duration off: $VDUR (want ~3.0)"
 
+# --- CONTENT SNIFFING: a media file with the wrong extension is still detected,
+# listed, and served with the right content type --------------------------------
+ffmpeg -v error -f lavfi -i "sine=frequency=550:duration=2" -write_xing 1 -y "$TESTDIR/mys.mp3"
+cp "$TESTDIR/mys.mp3" "$TESTDIR/A/share/mystery.dat"   # mp3 bytes, .dat extension
+fctl A rescan > /dev/null
+curl -s "$BASE/files" > "$TESTDIR/files.json"
+[ "$(sel mystery.dat .media.content_type)" = "audio/mpeg" ] \
+    || die "misnamed mp3 not sniffed as audio/mpeg: $(sel mystery.dat .media.content_type)"
+DHASH="$(sel mystery.dat .hash)"
+DCT="$(curl -s -o /dev/null -w '%header{content-type}' "$BASE/file/$DHASH")"
+[ "$DCT" = "audio/mpeg" ] || die "misnamed file served as $DCT, want audio/mpeg"
+
 # --- SEARCH matches tags, not just the filename ------------------------------
 # the file is song.mp3 (no "artist" in the name), but its artist tag is "Test
 # Artist" — a federated /search for it must still find the file

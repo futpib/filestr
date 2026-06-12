@@ -444,9 +444,20 @@ async fn serve_file(
         stream_windowed(state.clone(), parsed, hash.to_string(), start, end_excl)
     };
 
+    // Prefer the content type sniffed at index time (correct even for a file
+    // with a missing/wrong extension); fall back to the name's extension.
+    let ctype = state
+        .index
+        .read()
+        .await
+        .files
+        .iter()
+        .find(|f| f.hash == hash)
+        .and_then(|f| f.media.content_type.clone())
+        .unwrap_or_else(|| content_type(name).to_string());
     let mut builder = Response::builder()
         .header(header::ACCEPT_RANGES, "bytes")
-        .header(header::CONTENT_TYPE, content_type(name))
+        .header(header::CONTENT_TYPE, ctype)
         .header(header::CONTENT_LENGTH, len)
         .header(header::ETAG, &etag)
         .header("access-control-allow-origin", "*");

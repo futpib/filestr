@@ -21,27 +21,77 @@ pub struct Probed {
     pub cover: Option<Vec<u8>>,
 }
 
-/// Extract metadata (and cover art) for `path`, dispatched by extension. Never
-/// fails: an unreadable or unsupported file just yields empty results.
+/// Extract metadata (and cover art) for `path`. The content type is sniffed
+/// from the file's magic bytes (so a misnamed/extensionless file is still
+/// recognised), and that drives which extractor runs. Never fails: an
+/// unreadable or unsupported file just yields empty results.
 pub fn probe(path: &Path) -> Probed {
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_ascii_lowercase();
-    match ext.as_str() {
-        "mp3" | "flac" | "ogg" | "oga" | "opus" | "wav" | "m4a" | "aac" | "aiff" | "alac" => {
-            probe_audio(path).unwrap_or_default()
+    let content_type = sniff_content_type(path);
+    let mut probed = match content_type.as_deref() {
+        // audio containers + Matroska/WebM go through symphonia (duration, tags,
+        // cover art; its mkv demuxer handles webm/mkv duration too)
+        Some(t)
+            if t.starts_with("audio/") || t == "video/x-matroska" || t == "video/webm" =>
+        {
+            probe_symphonia(path).unwrap_or_default()
         }
-        "mp4" | "m4v" | "mov" => Probed {
-            meta: probe_mp4(path).unwrap_or_default(),
-            cover: None,
-        },
+        // mp4-family video: duration from the container header
+        Some("video/mp4") | Some("video/quicktime") => {
+            Probed { meta: probe_mp4(path).unwrap_or_default(), cover: None }
+        }
         _ => Probed::default(),
-    }
+    };
+    probed.meta.content_type = content_type;
+    probed
 }
 
-fn probe_audio(path: &Path) -> Option<Probed> {
+/// Identify a file's container by its magic bytes (reads only the head). Returns
+/// a MIME type for the formats we care about, else None.
+fn sniff_content_type(path: &Path) -> Option<String> {
+    use std::io::Read;
+    let mut head = [0u8; 64];
+    let n = std::fs::File::open(path).ok()?.read(&mut head).ok()?;
+    let b = &head[..n];
+    let ct = if b.starts_with(b"ID3") || (b.len() >= 2 && b[0] == 0xFF && (b[1] & 0xE0) == 0xE0) {
+        "audio/mpeg"
+    } else if b.starts_with(b"fLaC") {
+        "audio/flac"
+    } else if b.starts_with(b"OggS") {
+        "audio/ogg"
+    } else if b.len() >= 12 && &b[0..4] == b"RIFF" && &b[8..12] == b"WAVE" {
+        "audio/wav"
+    } else if b.len() >= 12 && &b[0..4] == b"FORM" && &b[8..12] == b"AIFF" {
+        "audio/aiff"
+    } else if b.starts_with(b"\x1aE\xdf\xa3") {
+        // EBML: Matroska or WebM. The DocType ("webm"/"matroska") sits a few
+        // bytes in; scan the head for it.
+        if b.windows(4).any(|w| w == b"webm") {
+            "video/webm"
+        } else {
+            "video/x-matroska"
+        }
+    } else if b.len() >= 12 && &b[4..8] == b"ftyp" {
+        // ISO-BMFF: the major brand at [8..12] tells audio (M4A) from video.
+        match &b[8..11] {
+            b"M4A" | b"M4B" => "audio/mp4",
+            b"qt " => "video/quicktime",
+            _ => "video/mp4",
+        }
+    } else if b.starts_with(&[0x89, b'P', b'N', b'G']) {
+        "image/png"
+    } else if b.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        "image/jpeg"
+    } else if b.starts_with(b"GIF8") {
+        "image/gif"
+    } else if b.len() >= 12 && &b[0..4] == b"RIFF" && &b[8..12] == b"WEBP" {
+        "image/webp"
+    } else {
+        return None;
+    };
+    Some(ct.to_string())
+}
+
+fn probe_symphonia(path: &Path) -> Option<Probed> {
     let file = std::fs::File::open(path).ok()?;
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
     let mut hint = Hint::new();
@@ -54,11 +104,17 @@ fn probe_audio(path: &Path) -> Option<Probed> {
 
     let mut meta = MediaMeta::default();
 
-    // Duration from the default audio track. Prefer the container's stated
-    // duration (in timebase units); fall back to the playable frame count.
-    // Some streams (e.g. CBR MP3 without a Xing header) report neither — then
-    // we leave the duration unset rather than guess.
-    if let Some(track) = reader.default_track(TrackType::Audio) {
+    // Duration from the default audio track, or — for video-only mkv/webm —
+    // any track that states one. Prefer the container's stated duration (in
+    // timebase units); fall back to the playable frame count. Some streams
+    // (e.g. CBR MP3 without a Xing header) report neither, leaving it unset.
+    let dur_track = reader.default_track(TrackType::Audio).or_else(|| {
+        reader
+            .tracks()
+            .iter()
+            .find(|t| t.time_base.is_some() && (t.duration.is_some() || t.num_frames.is_some()))
+    });
+    if let Some(track) = dur_track {
         let ticks = track.duration.map(|d| d.get()).or(track.num_frames);
         if let (Some(tb), Some(ticks)) = (track.time_base, ticks) {
             if let Some(time) = tb.calc_time(Timestamp::from(ticks as i64)) {

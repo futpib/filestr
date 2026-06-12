@@ -276,6 +276,11 @@ pub struct MediaMeta {
     pub artist: Option<String>,
     #[serde(default)]
     pub album: Option<String>,
+    /// Content type sniffed from the file's magic bytes at index time (so a
+    /// misnamed or extensionless media file is still recognised). e.g.
+    /// "audio/mpeg", "video/mp4".
+    #[serde(default)]
+    pub content_type: Option<String>,
 }
 
 impl MediaMeta {

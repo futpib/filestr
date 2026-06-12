@@ -33,7 +33,7 @@ pub struct Index {
 }
 
 /// Bump when the on-disk `IndexedFile` layout changes, to invalidate old caches.
-const INDEX_CACHE_VERSION: u32 = 1;
+const INDEX_CACHE_VERSION: u32 = 2;
 
 impl Index {
     /// Load the persisted index cache (best-effort): a content-keyed cache of

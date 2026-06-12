@@ -92,7 +92,7 @@ source.getContentDetails = function (url) {
 			new VideoUrlSource({
 				name: "filestr",
 				url: contentUrl(hash, fileName),
-				container: containerOf(fileName),
+				container: item ? contentType(item) : containerOf(fileName),
 				duration: dur,
 				width: 0,
 				height: 0,
@@ -128,11 +128,18 @@ function fetchSearch(query) {
 // maps to the generic octet-stream container is hidden), optionally restrict to
 // the selected media classes, then map to Grayjay videos.
 function toVideos(files, mimeClasses) {
-	let out = files.filter((f) => isPlayable(f.name));
+	let out = files.filter(isPlayable);
 	if (mimeClasses && mimeClasses.length) {
-		out = out.filter((f) => mimeClasses.indexOf(mimeClassOf(f.name)) !== -1);
+		out = out.filter((f) => mimeClasses.indexOf(mimeClassOf(f)) !== -1);
 	}
 	return out.map(fileToVideo);
+}
+
+// The content type for a file: the type sniffed at index time (correct even for
+// a misnamed file), else inferred from the filename extension.
+function contentType(f) {
+	const ct = f.media && f.media.content_type;
+	return ct || containerOf(f.name);
 }
 
 function fileToVideo(f) {
@@ -203,13 +210,13 @@ function baseName(path) {
 	return parts[parts.length - 1] || path;
 }
 
-function isPlayable(name) {
-	return containerOf(name) !== "application/octet-stream";
+function isPlayable(f) {
+	return contentType(f) !== "application/octet-stream";
 }
 
-// "audio" or "video" (or "" for non-media) from the file's container type.
-function mimeClassOf(name) {
-	return containerOf(name).split("/")[0];
+// "audio" or "video" (or "" for non-media) from the file's content type.
+function mimeClassOf(f) {
+	return contentType(f).split("/")[0];
 }
 
 function containerOf(name) {
