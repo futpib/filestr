@@ -153,11 +153,15 @@ pub struct SearchConfig {
     pub timeout_secs: u64,
     /// Maximum results returned/forwarded per query.
     pub result_cap: usize,
+    /// Per-peer deadline for a `/files` browse, seconds. A slow or unreachable
+    /// peer can't stall the whole listing past this — its results are simply
+    /// omitted from that response (kept fresh, never cached).
+    pub browse_timeout_secs: u64,
 }
 
 impl Default for SearchConfig {
     fn default() -> Self {
-        Self { max_ttl: 5, fanout: 8, timeout_secs: 15, result_cap: 500 }
+        Self { max_ttl: 5, fanout: 8, timeout_secs: 15, result_cap: 500, browse_timeout_secs: 4 }
     }
 }
 

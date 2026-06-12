@@ -173,14 +173,39 @@ async fn list_files(state: &Arc<State>, is_head: bool) -> Result<Response<Body>>
         }
     }
 
-    // each peer's browse
+    // each peer's browse — run concurrently with a per-peer deadline so one slow
+    // or unreachable peer can't stall the whole listing (a hung browse used to
+    // hang /files past an HTTP client's timeout). Results stay fresh: a peer that
+    // misses the deadline is simply omitted from this response, never cached.
     let peers = { state.grants.lock().await.grants.peers.clone() };
+    let browse_timeout =
+        std::time::Duration::from_secs(state.config.read().await.search.browse_timeout_secs.max(1));
+    let mut browses = tokio::task::JoinSet::new();
     for peer in peers {
         let label = peer.label.clone().unwrap_or_else(|| short(&peer.node_id));
-        let entries = match browse_peer(state, &peer.node_id).await {
-            Ok(e) => e,
+        let node_id = peer.node_id.clone();
+        let state = state.clone();
+        browses.spawn(async move {
+            let res = tokio::time::timeout(browse_timeout, browse_peer(&state, &node_id)).await;
+            (label, node_id, res)
+        });
+    }
+    while let Some(joined) = browses.join_next().await {
+        let (label, node_id, res) = match joined {
+            Ok(v) => v,
             Err(e) => {
-                tracing::debug!("browse {} failed: {e:#}", peer.node_id);
+                tracing::debug!("browse task panicked: {e:#}");
+                continue;
+            }
+        };
+        let entries = match res {
+            Ok(Ok(e)) => e,
+            Ok(Err(e)) => {
+                tracing::debug!("browse {node_id} failed: {e:#}");
+                continue;
+            }
+            Err(_) => {
+                tracing::debug!("browse {node_id} timed out after {browse_timeout:?}");
                 continue;
             }
         };
@@ -190,7 +215,7 @@ async fn list_files(state: &Arc<State>, is_head: bool) -> Result<Response<Body>>
             for entry in &entries {
                 recent.insert(
                     &entry.hash,
-                    SourceRef { peer: peer.node_id.clone(), handle: None, size: entry.size },
+                    SourceRef { peer: node_id.clone(), handle: None, size: entry.size },
                 );
             }
         }
