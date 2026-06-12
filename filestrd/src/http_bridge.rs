@@ -327,6 +327,10 @@ fn serve_grayjay(path: &str, host: &str, is_head: bool) -> Result<Response<Body>
             cfg["sourceUrl"] = format!("{base}/FilestrConfig.json").into();
             cfg["scriptUrl"] = format!("{base}/FilestrScript.js").into();
             cfg["iconUrl"] = format!("{base}/filestr.png").into();
+            // Auto-derived from the git commit count (build.rs) so it rises on
+            // every change — Grayjay only updates a plugin when its version goes
+            // up. Without this, plugin changes never reach installed clients.
+            cfg["version"] = env!("FILESTR_PLUGIN_VERSION").parse::<u64>().unwrap_or(1).into();
             ("application/json", serde_json::to_vec(&cfg)?)
         }
         "/grayjay/FilestrScript.js" => ("application/javascript", GRAYJAY_SCRIPT.as_bytes().to_vec()),
