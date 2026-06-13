@@ -240,11 +240,27 @@ source.getPlaylist = function (url) {
 // daemon resolves the memberships (GET /memberships?hash=) so this is one small
 // request, and opening one lands on the same playlist as the channel's Playlists
 // tab.
+//
+// Grayjay drives the Recommended tab from getContentRecommendations on the
+// content-details object (IPlatformVideoDetailsDef), so we attach it there (see
+// getContentDetails below). The Source-level method is kept too, for any surface
+// that uses it.
 source.getContentRecommendations = function (url) {
     const { hash } = parseFileUrl(url);
+    return recommendationsFor(hash);
+};
+// The playlists a file (by hash) belongs to, as a ContentPager of playlist
+// stubs. Empty when the hash is unknown or the gateway is unreachable.
+function recommendationsFor(hash) {
     if (!hash)
         return new FilestrContentPager([]);
-    const res = fetchMemberships(hash);
+    let res;
+    try {
+        res = fetchMemberships(hash);
+    }
+    catch (e) {
+        return new FilestrContentPager([]);
+    }
     const src = res.source || "local";
     const out = [];
     for (const g of res.groups || []) {
@@ -253,7 +269,7 @@ source.getContentRecommendations = function (url) {
         }
     }
     return new FilestrContentPager(out);
-};
+}
 source.getContentDetails = function (url) {
     const { hash, name } = parseFileUrl(url);
     // Find the matching file for accurate name/size; fall back to the URL.
@@ -283,6 +299,8 @@ source.getContentDetails = function (url) {
         description: item ? describe(item) : "",
         rating: new RatingLikes(0),
         video: sourceDescriptor(contentUrl(hash, fileName), container, dur),
+        // the Recommended tab: the playlists this file belongs to
+        getContentRecommendations: () => recommendationsFor(hash),
     });
 };
 // Build the playback source descriptor. An audio file must be served as an
