@@ -10,6 +10,9 @@
 //!   GET /playlists[?source=] -> JSON: server-side folder/album/artist groupings
 //!                            ({name, key, count, cover}) for the Grayjay channel
 //!                            Playlists tab, optionally scoped to one source
+//!   GET /playlist?kind=&key=&source= -> JSON {files,peers}: the tracks of ONE
+//!                            grouping (folder/album/artist), so an opened
+//!                            playlist resolves without a full /files pull
 //!   GET /file/{hash}      -> the bytes, with HTTP Range support (206)
 //!   GET /thumb/{hash}     -> cached cover-art thumbnail, if any
 //!
@@ -145,6 +148,12 @@ async fn route(state: Arc<State>, req: Request<hyper::body::Incoming>) -> Result
             .query()
             .and_then(|q| url_query(q).into_iter().find(|(k, _)| k == "source").map(|(_, v)| v));
         return list_playlists(&state, source.as_deref(), is_head).await;
+    }
+    if path == "/playlist" {
+        // resolve ONE grouping to its tracks: ?kind=folder|album|artist&key=&source=
+        let q: Vec<(String, String)> = req.uri().query().map(url_query).unwrap_or_default();
+        let get = |k: &str| q.iter().find(|(kk, _)| kk == k).map(|(_, v)| v.clone()).unwrap_or_default();
+        return list_playlist(&state, &get("kind"), &get("key"), &get("source"), is_head).await;
     }
     if path.starts_with("/grayjay") {
         let host = req
@@ -307,6 +316,8 @@ async fn list_files(state: &Arc<State>, is_head: bool) -> Result<Response<Body>>
 /// an offline peer apart from one with no files).
 async fn list_playlists(state: &Arc<State>, source: Option<&str>, is_head: bool) -> Result<Response<Body>> {
     let (files, peers) = collect_files(state).await?;
+    // an empty `?source=` means "whole library", same as omitting it
+    let source = source.filter(|s| !s.is_empty());
     // Only group media files — mirror the plugin's `isPlayable` (anything that
     // maps to the generic octet-stream container is hidden) so a folder/album's
     // count here matches what getPlaylist later resolves.
@@ -322,6 +333,33 @@ async fn list_playlists(state: &Arc<State>, source: Option<&str>, is_head: bool)
         &serde_json::json!({ "folders": folders, "albums": albums, "artists": artists, "peers": peers }),
         is_head,
     )
+}
+
+/// `/playlist?kind=&key=&source=`: the files in ONE grouping (a folder, album tag
+/// or artist tag), so the plugin can resolve an opened playlist without pulling
+/// and filtering the whole listing. `source` empty/absent = across the whole
+/// reachable library. Same `{files, peers}` shape as `/files`.
+async fn list_playlist(
+    state: &Arc<State>,
+    kind: &str,
+    key: &str,
+    source: &str,
+    is_head: bool,
+) -> Result<Response<Body>> {
+    let (files, peers) = collect_files(state).await?;
+    let want_source = (!source.is_empty()).then_some(source);
+    let files: Vec<FileItem> = files
+        .into_iter()
+        .filter(|f| item_playable(f))
+        .filter(|f| want_source.map_or(true, |s| f.source == s))
+        .filter(|f| match kind {
+            "folder" => folder_of(&f.name) == key,
+            "album" => f.media.album.as_deref() == Some(key),
+            "artist" => f.media.artist.as_deref() == Some(key),
+            _ => false,
+        })
+        .collect();
+    json_response(&serde_json::json!({ "files": files, "peers": peers }), is_head)
 }
 
 /// Group files by a key (album/artist tag, or folder path), counting each group

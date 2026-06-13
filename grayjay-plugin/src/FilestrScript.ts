@@ -193,41 +193,16 @@ source.isPlaylistUrl = function (url) {
 	return typeof url === "string" && url.indexOf("/playlist/") !== -1;
 };
 
-function albumOf(f: FileEntry): string {
-	return (f.media && f.media.album) || "";
-}
-
-function artistOf(f: FileEntry): string {
-	return (f.media && f.media.artist) || "";
-}
-
 source.getUserPlaylists = function () {
-	const files = fetchFiles().filter(isPlayable);
 	const out: string[] = [];
-	const seenFolder: Record<string, boolean> = {};
-	const seenAlbum: Record<string, boolean> = {};
-	const seenArtist: Record<string, boolean> = {};
-	for (const f of files) {
-		// this node's own folders (peer folders are reached via the peer channel)
-		if (f.source === "local") {
-			const folder = dirOf(f.name);
-			if (!seenFolder[folder]) {
-				seenFolder[folder] = true;
-				out.push(playlistUrl("folder", folder, "local"));
-			}
-		}
-		// albums and artists span the whole reachable library here (no source scope)
-		const album = albumOf(f);
-		if (album && !seenAlbum[album]) {
-			seenAlbum[album] = true;
-			out.push(playlistUrl("album", album, ""));
-		}
-		const artist = artistOf(f);
-		if (artist && !seenArtist[artist]) {
-			seenArtist[artist] = true;
-			out.push(playlistUrl("artist", artist, ""));
-		}
+	// this node's own folders (peer folders are reached via the peer channel)
+	for (const g of fetchPlaylists("local").folders || []) {
+		out.push(playlistUrl("folder", g.key, "local"));
 	}
+	// albums and artists span the whole reachable library (no source scope)
+	const all = fetchPlaylists("");
+	for (const g of all.albums || []) out.push(playlistUrl("album", g.key, ""));
+	for (const g of all.artists || []) out.push(playlistUrl("artist", g.key, ""));
 	return out;
 };
 
@@ -256,21 +231,15 @@ source.getChannelPlaylists = function (url) {
 
 source.getPlaylist = function (url) {
 	const p = parsePlaylistUrl(url);
-	const all = fetchFiles().filter(isPlayable);
-	let files: FileEntry[];
+	// The daemon resolves the grouping to its tracks (GET /playlist), so this
+	// stays a single small request instead of pulling and filtering all of /files.
+	const files = fetchPlaylistFiles(p);
 	let name: string;
-	if (p.kind === "album") {
-		files = all.filter((f) => albumOf(f) === p.name && (!p.source || f.source === p.source));
-		name = p.name || "Album";
-	} else if (p.kind === "artist") {
-		files = all.filter((f) => artistOf(f) === p.name && (!p.source || f.source === p.source));
-		name = p.name || "Artist";
-	} else {
-		files = all.filter((f) => f.source === p.source && dirOf(f.name) === p.folder);
-		name = folderName(p.folder);
-	}
+	if (p.kind === "album") name = p.name || "Album";
+	else if (p.kind === "artist") name = p.name || "Artist";
+	else name = folderName(p.folder);
 	const cover = files.find((f) => f.thumb);
-	const author = authorOf(files.length ? files[0].source : "local");
+	const author = authorOf(p.source || (files.length ? files[0].source : "local"));
 	return new PlatformPlaylistDetails({
 		id: new PlatformID(PLATFORM, `playlist:${p.kind}:${p.source}:${name}`, PLUGIN_ID),
 		name: name,
@@ -379,6 +348,16 @@ function fetchPlaylists(source: string): PlaylistsResponse {
 	return gatewayJson(`/playlists?source=${encodeURIComponent(source)}`) as PlaylistsResponse;
 }
 
+// The tracks of one grouping, resolved by the daemon (GET /playlist) so opening
+// a playlist is a single small request rather than a full /files pull + filter.
+function fetchPlaylistFiles(p: ParsedPlaylist): FileEntry[] {
+	const key = p.kind === "folder" ? p.folder : p.name;
+	const q =
+		`/playlist?kind=${encodeURIComponent(p.kind)}` +
+		`&key=${encodeURIComponent(key)}&source=${encodeURIComponent(p.source || "")}`;
+	return (gatewayJson(q) as IndexResponse).files || [];
+}
+
 // Everything this node can serve (its shares + a one-hop browse of peers).
 function fetchFiles(): FileEntry[] {
 	return fetchIndex("/files").files || [];
@@ -475,12 +454,6 @@ function channelUrl(source: string): string {
 function parseChannelUrl(url: string): string {
 	const m = /\/channel\/([^/?#]+)/.exec(url || "");
 	return m ? decodeURIComponent(m[1]) : "local";
-}
-
-// The folder a file lives in (its visible path minus the final segment).
-function dirOf(name: string): string {
-	const i = (name || "").lastIndexOf("/");
-	return i === -1 ? "" : name.slice(0, i);
 }
 
 // Display name of a folder/playlist: its last path segment.

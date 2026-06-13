@@ -66,7 +66,10 @@ A playlist is a grouping of files, tagged with its `kind`. A playlist URL is
 The trailing `<source>` scopes album/artist to one peer (empty = the whole
 reachable library), so the same album name from two peers stays distinct and an
 offline peer's playlist resolves to nothing rather than another peer's tracks.
-`getPlaylist` filters `/files` accordingly. Two surfaces produce these:
+`getPlaylist` resolves an opened playlist to its tracks via
+`GET /playlist?kind=&key=&source=` (returns `{files, peers}`) — the daemon does
+the filtering, so it's one small request, not a full `/files` pull. Two surfaces
+produce the playlist lists themselves:
 
 - **`getChannelPlaylists(channelUrl)`** — a peer's (or `local`'s) folders +
   albums + artists, all scoped to that source. This drives the **Playlists tab**
@@ -77,9 +80,11 @@ offline peer's playlist resolves to nothing rather than another peer's tracks.
   each group `{name, key, count, cover}`), so the plugin ships a few hundred stubs
   instead of pulling and grouping the whole `/files` listing (which was seconds of
   transfer + JS work for a 14k-file peer).
-- **`getUserPlaylists()`** — the whole library's folders/albums/artists, for
-  Grayjay's "Import playlists" migration (only offered for logged-in sources, so
-  not reachable for filestr today, but kept correct).
+- **`getUserPlaylists()`** — the whole library's folders/albums/artists (local
+  folders + global album/artist tags), for Grayjay's "Import playlists" migration
+  (only offered for logged-in sources, so not reachable for filestr today, but
+  kept correct). Also built from `/playlists`, not a raw `/files` pull.
 
-Same `/files` data, no new endpoint. So a shared `music/` folder appears as a
-folder playlist, a tagged collection as one album/artist playlist per tag.
+So a shared `music/` folder appears as a folder playlist, a tagged collection as
+one album/artist playlist per tag — all grouped/resolved by the daemon
+(`/playlists`, `/playlist`), never by pulling the whole listing into the plugin.

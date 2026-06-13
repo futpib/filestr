@@ -63,4 +63,21 @@ EMPTY="$(curl -s "$BASE/playlists?source=nosuchpeer")"
 [ "$(echo "$EMPTY" | jq '.albums|length')" = "0" ] || die "unknown source should have no albums"
 [ "$(echo "$EMPTY" | jq '.artists|length')" = "0" ] || die "unknown source should have no artists"
 
+# --- resolve ONE grouping to its tracks (GET /playlist) -----------------------
+# artist "Tester" -> its 3 tracks, all playable; non-media never appears
+curl -s "$BASE/playlist?kind=artist&key=Tester&source=local" > "$TESTDIR/one.json"
+echo "one playlist: $(cat "$TESTDIR/one.json")"
+[ "$(jq '.files|length' "$TESTDIR/one.json")" = "3" ] || die "/playlist artist=Tester wrong track count"
+jq -e 'all(.files[]; .media.artist=="Tester")' "$TESTDIR/one.json" >/dev/null || die "/playlist returned a non-matching track"
+# album scope
+[ "$(curl -s "$BASE/playlist?kind=album&key=Greatest%20Hits&source=local" | jq '.files|length')" = "2" ] || die "/playlist album wrong count"
+# folder scope (the share root "files") excludes the non-media .bin -> 3, not 4
+[ "$(curl -s "$BASE/playlist?kind=folder&key=files&source=local" | jq '.files|length')" = "3" ] || die "/playlist folder wrong count (non-media leaked?)"
+# the resolved tracks are streamable
+H="$(jq -r '.files[0].hash' "$TESTDIR/one.json")"
+curl -s -o "$TESTDIR/trk.mp3" "$BASE/file/$H"
+[ -s "$TESTDIR/trk.mp3" ] || die "resolved track did not stream"
+# empty source = whole library (still finds the artist here)
+[ "$(curl -s "$BASE/playlist?kind=artist&key=Tester&source=" | jq '.files|length')" = "3" ] || die "/playlist empty source should span library"
+
 echo OK
