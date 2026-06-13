@@ -136,12 +136,20 @@ large-peer (>LRU) streaming guard, and the full chat plane (hub create/join/
 request/address, persistence across restart, chat-disabled queued join, external
 nostr relay).
 
-Only the **Grayjay JS-plugin** tests remain under `scripts/autotests/` — they run
-the plugin in node against Grayjay's own scaffolding, so they stay bash:
+The **Grayjay plugin-runtime** tests load the plugin into Grayjay's own
+scaffolding (`polyfil.js` + `source.js`) and exercise `source.*`. They're
+[`node --test`](https://nodejs.org/api/test.html) suites in
+[`grayjay-plugin/test/`](grayjay-plugin/test) (harness in `test/harness/`),
+driving the same real daemon over its gateway:
 
 ```sh
-scripts/autotests/run-all.sh   # grayjay-*.sh (need node + GRAYJAY_SCRIPTS)
+cd grayjay-plugin && npm test   # builds the daemon, then runs test/*.test.js
 ```
+
+They skip cleanly unless Grayjay's scaffolding is present (a sibling `grayjay`
+checkout, or `GRAYJAY_SCRIPTS=<dir>`). The only remaining bash test is the
+plugin's tsc/build guard, run via `scripts/autotests/run-all.sh` (or
+`npm run check-sync`).
 
 ## Lineage
 

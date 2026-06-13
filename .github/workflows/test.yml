@@ -27,3 +27,28 @@ jobs:
 
       - name: Run e2e tests
         run: cargo test -p filestrd --features grayjay
+
+  grayjay-plugin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      # The plugin-runtime tests need Grayjay's injected scaffolding (polyfil.js +
+      # source.js). Without GRAYJAY_SCRIPTS / a sibling grayjay checkout they skip
+      # cleanly; the build + harness load are still exercised. The tsc/sync guard
+      # always runs.
+      - name: Plugin typecheck + sync guard
+        working-directory: grayjay-plugin
+        run: npm install && npm run check-sync
+      - name: Plugin runtime tests (skip without scaffolding)
+        working-directory: grayjay-plugin
+        run: npm test

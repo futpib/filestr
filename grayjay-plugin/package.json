@@ -6,7 +6,9 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "check-sync": "tsc -p tsconfig.json && git diff --exit-code -- FilestrScript.js"
+    "check-sync": "tsc -p tsconfig.json && git diff --exit-code -- FilestrScript.js",
+    "pretest": "cd .. && cargo build -q -p filestrd --features grayjay && cargo build -q -p filestrctl",
+    "test": "node --test test/*.test.js"
   },
   "devDependencies": {
     "@types/grayjay-source": "gitlab:kaidelorenzo/grayjay-plugin-types#6743b69e9b2a3afffa54cf2a9d3c46033e76021c",

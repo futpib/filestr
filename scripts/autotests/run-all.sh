@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Build then run every e2e test. Each test is hermetic: its own tmpdir,
-# isolated daemons on localhost, relay disabled.
+# Run the remaining bash tests (only the Grayjay tsc/build guard now). The daemon
+# e2e suite is Rust (`cargo test -p filestrd --features grayjay`) and the Grayjay
+# plugin-runtime suite is node (`cd grayjay-plugin && npm test`). Each test is
+# hermetic: its own tmpdir, isolated daemons on localhost, relay disabled.
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
