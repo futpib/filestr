@@ -8,6 +8,8 @@ HTTP gateway over loopback.
 ```
 Grayjay (plugin)  ──HTTP/localhost──►  filestr app's [http] gateway
                                           ├─ GET /files          (browse)
+                                          ├─ GET /search?q=      (federated)
+                                          ├─ GET /playlists      (folder/album/artist groups)
                                           └─ GET /file/{hash}    (stream, Range)
                                                  └─ iroh fetch from peers as needed
 ```

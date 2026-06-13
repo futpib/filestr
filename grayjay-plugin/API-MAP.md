@@ -72,7 +72,11 @@ offline peer's playlist resolves to nothing rather than another peer's tracks.
   albums + artists, all scoped to that source. This drives the **Playlists tab**
   on the channel page, which Grayjay shows for any plugin that defines the method
   (no login). It returns lightweight stubs (name + count + cover); Grayjay calls
-  `getPlaylist` lazily when one is opened.
+  `getPlaylist` lazily when one is opened. The grouping is done **server-side**
+  via `GET /playlists?source=<label>` (returns `{folders, albums, artists, peers}`,
+  each group `{name, key, count, cover}`), so the plugin ships a few hundred stubs
+  instead of pulling and grouping the whole `/files` listing (which was seconds of
+  transfer + JS work for a 14k-file peer).
 - **`getUserPlaylists()`** — the whole library's folders/albums/artists, for
   Grayjay's "Import playlists" migration (only offered for logged-in sources, so
   not reachable for filestr today, but kept correct).

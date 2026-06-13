@@ -6,6 +6,10 @@
 //!
 //! Endpoints:
 //!   GET /files            -> JSON: every servable file {name, hash, size, source, media, thumb}
+//!   GET /search?q=        -> JSON: federated grant-graph search, same file shape
+//!   GET /playlists[?source=] -> JSON: server-side folder/album/artist groupings
+//!                            ({name, key, count, cover}) for the Grayjay channel
+//!                            Playlists tab, optionally scoped to one source
 //!   GET /file/{hash}      -> the bytes, with HTTP Range support (206)
 //!   GET /thumb/{hash}     -> cached cover-art thumbnail, if any
 //!
@@ -59,6 +63,31 @@ fn is_false(b: &bool) -> bool {
     !*b
 }
 
+/// Per-peer reachability for one aggregation pass (mirrors the `peers` array in
+/// `/files`): a granted peer is `reachable` only if its live browse answered.
+#[derive(Serialize, Clone)]
+struct PeerStat {
+    label: String,
+    node_id: String,
+    reachable: bool,
+}
+
+/// A playlist grouping (a folder, an album tag, or an artist tag) summarised for
+/// the Grayjay channel Playlists tab: just enough to render a stub, so the plugin
+/// never has to pull and group the whole file list. `key` is the opaque value the
+/// plugin puts in the playlist URL (a folder path, or the album/artist name);
+/// `name` is its display label.
+#[derive(Serialize)]
+struct Group {
+    name: String,
+    key: String,
+    count: u64,
+    /// A hash in the group that has a cached thumbnail (served at `/thumb/{cover}`),
+    /// for the playlist cover. Omitted when none of the group's files have one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cover: Option<String>,
+}
+
 /// Run the gateway until the process exits.
 pub async fn serve(state: Arc<State>, addr: std::net::SocketAddr) -> Result<()> {
     let listener = TcpListener::bind(addr).await.with_context(|| format!("binding http {addr}"))?;
@@ -108,6 +137,15 @@ async fn route(state: Arc<State>, req: Request<hyper::body::Incoming>) -> Result
             .unwrap_or_default();
         return search_files(&state, &query, is_head).await;
     }
+    if path == "/playlists" {
+        // optional `?source=<label>` scopes the groupings to one channel
+        // ("local" or a peer label); absent = the whole reachable library.
+        let source = req
+            .uri()
+            .query()
+            .and_then(|q| url_query(q).into_iter().find(|(k, _)| k == "source").map(|(_, v)| v));
+        return list_playlists(&state, source.as_deref(), is_head).await;
+    }
     if path.starts_with("/grayjay") {
         let host = req
             .headers()
@@ -149,9 +187,10 @@ async fn route(state: Arc<State>, req: Request<hyper::body::Incoming>) -> Result
 }
 
 /// Aggregate everything this node can serve: its own shares plus a live browse
-/// of every peer. Browsing also records the source so a later `/file/{hash}`
-/// can fetch it.
-async fn list_files(state: &Arc<State>, is_head: bool) -> Result<Response<Body>> {
+/// of every peer, as `FileItem`s plus per-peer reachability for this pass.
+/// Browsing also records each file's source so a later `/file/{hash}` can fetch
+/// it. Shared by `/files` and `/playlists` so both see the same fresh view.
+async fn collect_files(state: &Arc<State>) -> Result<(Vec<FileItem>, Vec<PeerStat>)> {
     use std::collections::BTreeMap;
     let mut by_hash: BTreeMap<String, FileItem> = BTreeMap::new();
 
@@ -247,13 +286,91 @@ async fn list_files(state: &Arc<State>, is_head: bool) -> Result<Response<Body>>
     }
 
     let files: Vec<FileItem> = by_hash.into_values().collect();
-    let peer_status: Vec<serde_json::Value> = reach
+    let peer_status: Vec<PeerStat> = reach
         .into_iter()
-        .map(|(node_id, (label, reachable))| {
-            serde_json::json!({ "label": label, "node_id": node_id, "reachable": reachable })
-        })
+        .map(|(node_id, (label, reachable))| PeerStat { label, node_id, reachable })
         .collect();
-    let json = serde_json::to_vec(&serde_json::json!({ "files": files, "peers": peer_status }))?;
+    Ok((files, peer_status))
+}
+
+/// `/files`: every servable file plus per-peer reachability.
+async fn list_files(state: &Arc<State>, is_head: bool) -> Result<Response<Body>> {
+    let (files, peers) = collect_files(state).await?;
+    json_response(&serde_json::json!({ "files": files, "peers": peers }), is_head)
+}
+
+/// `/playlists[?source=<label>]`: the channel Playlists tab, computed server-side
+/// so the plugin gets a few hundred grouping stubs instead of pulling and
+/// grouping the entire (potentially 14k-file) listing itself. Returns one entry
+/// per folder, album tag and artist tag — scoped to `source` when given — plus
+/// the same `peers` reachability array as `/files` (so the plugin can still tell
+/// an offline peer apart from one with no files).
+async fn list_playlists(state: &Arc<State>, source: Option<&str>, is_head: bool) -> Result<Response<Body>> {
+    let (files, peers) = collect_files(state).await?;
+    // Only group media files — mirror the plugin's `isPlayable` (anything that
+    // maps to the generic octet-stream container is hidden) so a folder/album's
+    // count here matches what getPlaylist later resolves.
+    let items: Vec<&FileItem> = files
+        .iter()
+        .filter(|f| item_playable(f))
+        .filter(|f| source.map_or(true, |s| f.source == s))
+        .collect();
+    let folders = group(&items, |f| Some(folder_of(&f.name)), folder_name);
+    let albums = group(&items, |f| f.media.album.clone().filter(|s| !s.is_empty()), str::to_string);
+    let artists = group(&items, |f| f.media.artist.clone().filter(|s| !s.is_empty()), str::to_string);
+    json_response(
+        &serde_json::json!({ "folders": folders, "albums": albums, "artists": artists, "peers": peers }),
+        is_head,
+    )
+}
+
+/// Group files by a key (album/artist tag, or folder path), counting each group
+/// and picking a thumbnailed hash as its cover. `name_of` turns the grouping key
+/// into a display label (identity for tags; last path segment for folders).
+fn group(
+    items: &[&FileItem],
+    key_of: impl Fn(&FileItem) -> Option<String>,
+    name_of: impl Fn(&str) -> String,
+) -> Vec<Group> {
+    use std::collections::BTreeMap;
+    let mut map: BTreeMap<String, (u64, Option<String>)> = BTreeMap::new();
+    for f in items {
+        let Some(key) = key_of(f) else { continue };
+        let e = map.entry(key).or_insert((0, None));
+        e.0 += 1;
+        if e.1.is_none() && f.thumb {
+            e.1 = Some(f.hash.clone());
+        }
+    }
+    map.into_iter()
+        .map(|(key, (count, cover))| Group { name: name_of(&key), key, count, cover })
+        .collect()
+}
+
+/// Whether a file is media the plugin would play — i.e. its content type (sniffed
+/// at index time, else inferred from the extension) isn't the generic
+/// octet-stream. Matches the plugin's `isPlayable`.
+fn item_playable(f: &FileItem) -> bool {
+    let ct = f.media.content_type.clone().unwrap_or_else(|| content_type(&f.name).to_string());
+    ct != "application/octet-stream"
+}
+
+/// The folder a file lives in: its path minus the last segment ("" at the root).
+fn folder_of(name: &str) -> String {
+    name.rsplit_once('/').map(|(dir, _)| dir.to_string()).unwrap_or_default()
+}
+
+/// Display name for a folder grouping: its last path segment, or "files" at root.
+fn folder_name(folder: &str) -> String {
+    match folder.rsplit('/').next() {
+        Some(s) if !s.is_empty() => s.to_string(),
+        _ => "files".to_string(),
+    }
+}
+
+/// Serialize `value` as a JSON response (CORS-open), body suppressed for HEAD.
+fn json_response(value: &serde_json::Value, is_head: bool) -> Result<Response<Body>> {
+    let json = serde_json::to_vec(value)?;
     let len = json.len() as u64;
     Ok(Response::builder()
         .status(StatusCode::OK)

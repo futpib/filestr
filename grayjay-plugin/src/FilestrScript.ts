@@ -37,6 +37,23 @@ interface IndexResponse {
 	peers?: PeerStatus[];
 }
 
+// A playlist grouping summarised by the gateway's /playlists endpoint: enough to
+// render a stub without pulling the whole file list. `key` is the opaque value
+// that goes in the playlist URL (folder path, or album/artist name); `name` is
+// the display label; `cover` (when present) is a hash served at /thumb/<cover>.
+interface PlaylistGroup {
+	name: string;
+	key: string;
+	count: number;
+	cover?: string;
+}
+interface PlaylistsResponse {
+	folders?: PlaylistGroup[];
+	albums?: PlaylistGroup[];
+	artists?: PlaylistGroup[];
+	peers?: PeerStatus[];
+}
+
 const PLATFORM = "filestr";
 let PLUGIN_ID = "filestr";
 let BASE_URL = "http://127.0.0.1:11780";
@@ -217,40 +234,23 @@ source.getUserPlaylists = function () {
 // Playlists for one channel (a peer, or "local"): that source's folders, albums
 // and artists, scoped so opening one shows only that source's files and so the
 // same album name from two peers stays distinct. This is what populates the
-// channel page's Playlists tab.
+// channel page's Playlists tab. The daemon does the grouping (GET /playlists),
+// so this stays O(groups) instead of pulling and grouping the whole library.
 source.getChannelPlaylists = function (url) {
 	const src = parseChannelUrl(url);
-	const index = fetchIndex("/files");
+	const res = fetchPlaylists(src);
 	if (src !== "local") {
-		const peer = (index.peers || []).find((p) => p.label === src);
+		const peer = (res.peers || []).find((p) => p.label === src);
 		if (peer && peer.reachable === false) {
 			throw new ScriptException(
 				`${src} is offline — this peer isn't reachable right now, so its playlists can't be loaded. It'll be available again once it's back online.`
 			);
 		}
 	}
-	const files = (index.files || []).filter((f) => f.source === src && isPlayable(f));
-	const folders: Record<string, FileEntry[]> = {};
-	const albums: Record<string, FileEntry[]> = {};
-	const artists: Record<string, FileEntry[]> = {};
-	for (const f of files) {
-		const folder = dirOf(f.name);
-		(folders[folder] = folders[folder] || []).push(f);
-		const al = albumOf(f);
-		if (al) (albums[al] = albums[al] || []).push(f);
-		const ar = artistOf(f);
-		if (ar) (artists[ar] = artists[ar] || []).push(f);
-	}
 	const out: PlatformPlaylist[] = [];
-	for (const folder of Object.keys(folders)) {
-		out.push(playlistStub("folder", folderName(folder), folder, src, folders[folder]));
-	}
-	for (const al of Object.keys(albums)) {
-		out.push(playlistStub("album", al, al, src, albums[al]));
-	}
-	for (const ar of Object.keys(artists)) {
-		out.push(playlistStub("artist", ar, ar, src, artists[ar]));
-	}
+	for (const g of res.folders || []) out.push(groupStub("folder", g, src));
+	for (const g of res.albums || []) out.push(groupStub("album", g, src));
+	for (const g of res.artists || []) out.push(groupStub("artist", g, src));
 	return new FilestrPlaylistPager(out);
 };
 
@@ -355,17 +355,28 @@ function sourceDescriptor(url: string, container: string, duration: number): IVi
 
 // --- helpers ---------------------------------------------------------------
 
-// Fetch and parse a gateway listing endpoint (shape: {files, peers}). A failed
-// request almost always means the filestr app isn't running on this device, so
-// say that plainly instead of surfacing a raw HTTP status.
-function fetchIndex(pathAndQuery: string): IndexResponse {
+// Fetch and parse a gateway endpoint. A failed request almost always means the
+// filestr app isn't running on this device, so say that plainly instead of
+// surfacing a raw HTTP status.
+function gatewayJson(pathAndQuery: string): any {
 	const res = http.GET(`${BASE_URL}${pathAndQuery}`, {}, false);
 	if (!res.isOk) {
 		throw new ScriptException(
 			"filestr isn't reachable — open the filestr app on this device and make sure it's running, then try again."
 		);
 	}
-	return (JSON.parse(res.body) as IndexResponse) || {};
+	return JSON.parse(res.body) || {};
+}
+
+// A listing endpoint (shape: {files, peers}).
+function fetchIndex(pathAndQuery: string): IndexResponse {
+	return gatewayJson(pathAndQuery) as IndexResponse;
+}
+
+// Server-side playlist groupings for one channel ("local" or a peer label),
+// computed by the daemon so we don't pull and group the whole file list.
+function fetchPlaylists(source: string): PlaylistsResponse {
+	return gatewayJson(`/playlists?source=${encodeURIComponent(source)}`) as PlaylistsResponse;
 }
 
 // Everything this node can serve (its shares + a one-hop browse of peers).
@@ -514,25 +525,20 @@ function parsePlaylistUrl(url: string): ParsedPlaylist {
 	}
 }
 
-// Build a playlist stub (name + cover + count) for the channel Playlists tab.
-// Grayjay resolves the contents lazily via getPlaylist when one is opened.
-function playlistStub(
-	kind: ParsedPlaylist["kind"],
-	display: string,
-	urlKey: string,
-	source: string,
-	files: FileEntry[]
-): PlatformPlaylist {
-	const cover = files.find((f) => f.thumb);
+// Build a playlist stub (name + cover + count) for the channel Playlists tab from
+// a gateway grouping. Grayjay resolves the contents lazily via getPlaylist when
+// one is opened.
+function groupStub(kind: ParsedPlaylist["kind"], g: PlaylistGroup, source: string): PlatformPlaylist {
+	const coverUrl = g.cover ? `${BASE_URL}/thumb/${g.cover}` : "";
 	return new PlatformPlaylist({
-		id: new PlatformID(PLATFORM, `playlist:${kind}:${source}:${urlKey}`, PLUGIN_ID),
-		name: display,
-		thumbnails: cover ? thumbsFor(cover) : new Thumbnails([]),
-		thumbnail: cover ? `${BASE_URL}/thumb/${cover.hash}` : "",
+		id: new PlatformID(PLATFORM, `playlist:${kind}:${source}:${g.key}`, PLUGIN_ID),
+		name: g.name,
+		thumbnails: g.cover ? new Thumbnails([new Thumbnail(coverUrl, 0)]) : new Thumbnails([]),
+		thumbnail: coverUrl,
 		author: authorOf(source),
 		datetime: nowSeconds(),
-		url: playlistUrl(kind, urlKey, source),
-		videoCount: files.length,
+		url: playlistUrl(kind, g.key, source),
+		videoCount: g.count,
 	});
 }
 
