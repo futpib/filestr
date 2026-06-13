@@ -55,6 +55,33 @@ fvm flutter build apk --debug
 # -> build/app/outputs/flutter-apk/app-debug.apk
 ```
 
+## Releases (GitHub CI)
+
+[`.github/workflows/build-apk.yml`](../.github/workflows/build-apk.yml) builds a
+release APK and publishes it as a GitHub Release. Run it from the repo's
+**Actions → Build APK → Run workflow** (manual trigger, like iroh-ssh-android).
+It cross-compiles the daemon for both ABIs, builds the APK, derives the version
+from the previous release's build number `+1`, and uploads the APK to a new
+release tagged `YY.MM.DD.HH.MM+<code>`. It checks out full history
+(`fetch-depth: 0`) so the Grayjay plugin's git-commit-count version is correct.
+
+Signing is optional:
+
+- **No secret** → the APK is debug-signed (still installs). Works out of the box.
+- **Signed release** → add a repo secret `KEYSTORE_BASE64`. The Gradle release
+  signing config (`android/app/build.gradle.kts`) reads `KEYSTORE_PATH` and
+  expects store/key password `android`, key alias `release`:
+
+  ```sh
+  keytool -genkeypair -v -keystore release.jks -alias release \
+      -keyalg RSA -keysize 2048 -validity 10000 \
+      -storepass android -keypass android -dname "CN=filestr"
+  base64 -w0 release.jks   # paste into the KEYSTORE_BASE64 secret
+  ```
+
+  Keep `release.jks` safe — Android requires every update to be signed with the
+  same key.
+
 ## Local HTTP gateway (Grayjay)
 
 The generated config enables the daemon's loopback HTTP gateway

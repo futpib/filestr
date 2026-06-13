@@ -40,11 +40,30 @@ android {
         }
     }
 
+    // A release keystore is supplied by CI via the KEYSTORE_PATH env var (decoded
+    // from the KEYSTORE_BASE64 repo secret — see .github/workflows/build-apk.yml).
+    // Convention (same as iroh-ssh-android): store/key password "android", key
+    // alias "release". When absent (local builds, or CI without the secret) the
+    // release build falls back to the debug keys so it still installs.
+    signingConfigs {
+        val keystorePath = System.getenv("KEYSTORE_PATH")
+        if (!keystorePath.isNullOrEmpty()) {
+            create("release") {
+                storeFile = file(keystorePath)
+                storePassword = "android"
+                keyAlias = "release"
+                keyPassword = "android"
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (signingConfigs.names.contains("release")) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
         }
     }
 }
