@@ -175,6 +175,27 @@ source.getUserSubscriptions = function () {
 	return Object.keys(sources).map(channelUrl);
 };
 
+// Creator (channel) search: filestr's "creators" are your peers (plus this node),
+// so this populates the search screen's Creators tab. Matches on the channel
+// label, and uses the lightweight /peers grant list (no file browse) so it's
+// instant.
+source.searchChannels = function (query) {
+	const q = (query || "").toLowerCase();
+	const out: PlatformChannel[] = [];
+	const seen: Record<string, boolean> = {};
+	const add = (src: string, label: string) => {
+		if (seen[src]) return;
+		if (q && label.toLowerCase().indexOf(q) === -1) return;
+		seen[src] = true;
+		out.push(channelStub(src));
+	};
+	add("local", "This node");
+	for (const p of fetchGrantedPeers()) {
+		if (p.label && p.label !== "local") add(p.label, p.label);
+	}
+	return new FilestrChannelPager(out);
+};
+
 // --- playlists: shared folders, plus tag-based albums and artists ----------
 //
 // A library browses by album and artist, not just by directory. The daemon
@@ -204,6 +225,24 @@ source.getUserPlaylists = function () {
 	for (const g of all.albums || []) out.push(playlistUrl("album", g.key, ""));
 	for (const g of all.artists || []) out.push(playlistUrl("artist", g.key, ""));
 	return out;
+};
+
+// Playlist search: match album/artist names across the whole reachable library,
+// so filestr collections appear in the search screen's Playlists tab. (Folder
+// playlists are per-source and aren't globally resolvable, so search covers the
+// tag-based groupings.)
+source.searchPlaylists = function (query) {
+	const q = (query || "").toLowerCase();
+	if (!q) return new FilestrPlaylistPager([]);
+	const res = fetchPlaylists("");
+	const out: PlatformPlaylist[] = [];
+	for (const g of res.albums || []) {
+		if (g.name.toLowerCase().indexOf(q) !== -1) out.push(groupStub("album", g, ""));
+	}
+	for (const g of res.artists || []) {
+		if (g.name.toLowerCase().indexOf(q) !== -1) out.push(groupStub("artist", g, ""));
+	}
+	return new FilestrPlaylistPager(out);
 };
 
 // Playlists for one channel (a peer, or "local"): that source's folders, albums
@@ -369,6 +408,12 @@ function fetchPeers(): PeerStatus[] {
 	return fetchIndex("/files").peers || [];
 }
 
+// The granted peers straight from the grant graph (no file browse) — for creator
+// search, which only needs the channel list, not files or live reachability.
+function fetchGrantedPeers(): PeerStatus[] {
+	return (gatewayJson("/peers") as IndexResponse).peers || [];
+}
+
 // The daemon's federated grant-graph search: reaches the whole reachable graph,
 // not just direct peers, and matches the tag metadata (title/artist/album), not
 // just the filename. The gateway records sources so the results are playable.
@@ -454,6 +499,18 @@ function channelUrl(source: string): string {
 function parseChannelUrl(url: string): string {
 	const m = /\/channel\/([^/?#]+)/.exec(url || "");
 	return m ? decodeURIComponent(m[1]) : "local";
+}
+
+// A minimal channel for search results (no offline probe — getChannel adds the
+// "⚠ Offline" marker when the channel is actually opened).
+function channelStub(src: string): PlatformChannel {
+	return new PlatformChannel({
+		id: new PlatformID(PLATFORM, `peer:${src}`, PLUGIN_ID),
+		name: src === "local" ? "This node" : src,
+		thumbnail: "",
+		description: src === "local" ? "Files this node shares" : `Files reachable via ${src}`,
+		url: channelUrl(src),
+	});
 }
 
 // Display name of a folder/playlist: its last path segment.
@@ -617,6 +674,15 @@ class FilestrPlaylistPager extends PlaylistPager {
 	}
 	nextPage(): FilestrPlaylistPager {
 		return new FilestrPlaylistPager([]);
+	}
+}
+
+class FilestrChannelPager extends ChannelPager {
+	constructor(results: PlatformChannel[]) {
+		super(results, false);
+	}
+	nextPage(): FilestrChannelPager {
+		return new FilestrChannelPager([]);
 	}
 }
 

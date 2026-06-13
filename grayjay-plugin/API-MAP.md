@@ -16,6 +16,8 @@ empty stub is used.
 | `isContentDetailsUrl` / `getContentDetails` | a file → details + `/file/{hash}` stream (duration, thumbnail, artist/album) |
 | `isChannelUrl` / `getChannel` / `getChannelContents` / `getChannelCapabilities` | **a channel = a peer** ("local" = you); contents = that source's files from `/files` |
 | `getUserSubscriptions()` | your peers — one channel URL each |
+| `searchChannels(query)` | search screen **Creators tab**: your peers (+ this node) matched by label, from the lightweight `/peers` grant list (no browse) |
+| `searchPlaylists(query)` | search screen **Playlists tab**: album/artist groupings across the reachable library, matched by name |
 | `getChannelPlaylists(url)` | the channel's **Playlists tab**: that source's folders + album tags + artist tags as playlist stubs (login-free; the primary way to browse) |
 | `isPlaylistUrl` / `getPlaylist` / `getUserPlaylists` | **a playlist = a folder / album tag / artist tag**; `getPlaylist` resolves a `/playlist/<kind>…` URL to its tracks, `getUserPlaylists` lists the whole library's groupings (used only by Grayjay's logged-in "Import playlists" flow) |
 

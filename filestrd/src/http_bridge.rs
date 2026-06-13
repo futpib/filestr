@@ -13,6 +13,8 @@
 //!   GET /playlist?kind=&key=&source= -> JSON {files,peers}: the tracks of ONE
 //!                            grouping (folder/album/artist), so an opened
 //!                            playlist resolves without a full /files pull
+//!   GET /peers            -> JSON {peers:[{label,node_id}]}: granted channels
+//!                            (no browse), for creator search
 //!   GET /file/{hash}      -> the bytes, with HTTP Range support (206)
 //!   GET /thumb/{hash}     -> cached cover-art thumbnail, if any
 //!
@@ -154,6 +156,9 @@ async fn route(state: Arc<State>, req: Request<hyper::body::Incoming>) -> Result
         let q: Vec<(String, String)> = req.uri().query().map(url_query).unwrap_or_default();
         let get = |k: &str| q.iter().find(|(kk, _)| kk == k).map(|(_, v)| v.clone()).unwrap_or_default();
         return list_playlist(&state, &get("kind"), &get("key"), &get("source"), is_head).await;
+    }
+    if path == "/peers" {
+        return list_peers(&state, is_head).await;
     }
     if path.starts_with("/grayjay") {
         let host = req
@@ -360,6 +365,21 @@ async fn list_playlist(
         })
         .collect();
     json_response(&serde_json::json!({ "files": files, "peers": peers }), is_head)
+}
+
+/// `/peers`: the granted peers (label + node id) straight from the grant graph —
+/// no file browse, so it's instant. Used for creator (channel) search, which only
+/// needs the channel list, not their files or live reachability.
+async fn list_peers(state: &Arc<State>, is_head: bool) -> Result<Response<Body>> {
+    let peers = { state.grants.lock().await.grants.peers.clone() };
+    let arr: Vec<serde_json::Value> = peers
+        .iter()
+        .map(|p| {
+            let label = p.label.clone().unwrap_or_else(|| short(&p.node_id));
+            serde_json::json!({ "label": label, "node_id": p.node_id })
+        })
+        .collect();
+    json_response(&serde_json::json!({ "peers": arr }), is_head)
 }
 
 /// Group files by a key (album/artist tag, or folder path), counting each group
