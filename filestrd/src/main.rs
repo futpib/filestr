@@ -340,6 +340,7 @@ async fn run(args: Args, blob_rt: tokio::runtime::Handle) -> Result<()> {
         handles: tokio::sync::Mutex::new(Default::default()),
         seen_queries: tokio::sync::Mutex::new(Default::default()),
         recent_sources: tokio::sync::Mutex::new(Default::default()),
+        browse_sources: tokio::sync::Mutex::new(Default::default()),
         transfers: tokio::sync::Mutex::new(Default::default()),
         reputation: tokio::sync::Mutex::new(crate::state::RepState {
             store: rep_store,

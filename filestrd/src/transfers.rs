@@ -271,7 +271,14 @@ async fn candidates(
     peer_pref: &Option<String>,
 ) -> Result<Vec<(PeerIn, Option<String>)>> {
     let mut candidates = Vec::new();
-    let recent = state.recent_sources.lock().await.get(hash);
+    let mut seen: std::collections::HashSet<(String, Option<String>)> = Default::default();
+    // search-derived hits (small LRU), plus the full browse map's peers (which
+    // own the file directly, so handle = None) — the latter keeps large peers'
+    // files fetchable when the LRU has evicted them.
+    let mut recent = state.recent_sources.lock().await.get(hash);
+    for peer in state.browse_sources.lock().await.peers_for(hash) {
+        recent.push(crate::state::SourceRef { peer, handle: None, size: 0 });
+    }
     let grants = state.grants.lock().await;
     for source in recent {
         let Some(peer) = grants.grants.peers.iter().find(|p| p.node_id == source.peer) else {
@@ -281,7 +288,7 @@ async fn candidates(
             .as_deref()
             .map(|needle| peer.node_id.starts_with(needle) || peer.label.as_deref() == Some(needle))
             .unwrap_or(true);
-        if preferred {
+        if preferred && seen.insert((peer.node_id.clone(), source.handle.clone())) {
             candidates.push((peer.clone(), source.handle.clone()));
         }
     }

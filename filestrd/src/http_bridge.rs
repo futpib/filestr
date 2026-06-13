@@ -289,7 +289,10 @@ async fn collect_files(state: &Arc<State>) -> Result<(Vec<FileItem>, Vec<PeerSta
         if let Some(s) = reach.get_mut(&node_id) {
             s.1 = true;
         }
-        // record sources so /file/{hash} can locate them
+        // record sources so /file/{hash} can locate them. recent_sources is a
+        // small LRU (shared with search); browse_sources holds this peer's WHOLE
+        // listing so even a large peer's files (>LRU_CAP) stay resolvable — the
+        // LRU alone self-evicts most of a big browse's own entries.
         {
             let mut recent = state.recent_sources.lock().await;
             for entry in &entries {
@@ -298,6 +301,11 @@ async fn collect_files(state: &Arc<State>) -> Result<(Vec<FileItem>, Vec<PeerSta
                     SourceRef { peer: node_id.clone(), handle: None, size: entry.size },
                 );
             }
+        }
+        {
+            let peer_map: std::collections::HashMap<String, u64> =
+                entries.iter().map(|e| (e.hash.clone(), e.size)).collect();
+            state.browse_sources.lock().await.replace_peer(&node_id, peer_map);
         }
         for e in entries {
             let thumb = has_thumb(state, &e.hash);
@@ -998,7 +1006,8 @@ fn sniff_image(b: &[u8]) -> &'static str {
 }
 
 /// Size of `hash` from what we already know, without fetching: the local store
-/// if complete, else the share index, else a size reported by a recent browse.
+/// if complete, else the share index, else the last browse's full source map,
+/// else a recent search hit.
 async fn known_size(state: &Arc<State>, parsed: iroh_blobs::Hash, hash: &str) -> Option<u64> {
     if let Ok(iroh_blobs::api::proto::BlobStatus::Complete { size }) =
         state.store.blobs().status(parsed).await
@@ -1007,6 +1016,11 @@ async fn known_size(state: &Arc<State>, parsed: iroh_blobs::Hash, hash: &str) ->
     }
     if let Some(f) = state.index.read().await.files.iter().find(|f| f.hash == hash) {
         return Some(f.size);
+    }
+    // the full browse map resolves any currently-browsable peer file, even on a
+    // peer too large for the recent_sources LRU
+    if let Some(size) = state.browse_sources.lock().await.size_of(hash) {
+        return Some(size);
     }
     state
         .recent_sources

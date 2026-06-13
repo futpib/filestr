@@ -37,6 +37,11 @@ pub struct State {
     pub handles: tokio::sync::Mutex<Handles>,
     pub seen_queries: tokio::sync::Mutex<SeenQueries>,
     pub recent_sources: tokio::sync::Mutex<RecentSources>,
+    /// Full hash→source map from the most recent browse, so the gateway can
+    /// resolve the size/source of ANY currently-browsable peer file (see
+    /// [`BrowseSources`]). Distinct from `recent_sources`, whose small LRU
+    /// can't hold a large peer's whole listing.
+    pub browse_sources: tokio::sync::Mutex<BrowseSources>,
     pub transfers: tokio::sync::Mutex<crate::transfers::Transfers>,
     pub reputation: tokio::sync::Mutex<RepState>,
     /// The chat plane, or None when `[chat] enabled = false` (the node runs and
@@ -331,5 +336,47 @@ impl RecentSources {
 
     pub fn get(&self, hash: &str) -> Vec<SourceRef> {
         self.map.get(hash).cloned().unwrap_or_default()
+    }
+}
+
+/// The full hash→size map of every currently-browsable peer file, keyed by the
+/// owning peer's node id. Rebuilt per peer on each browse: a peer that answers
+/// has its whole sub-map replaced, while a peer that times out keeps its entries
+/// from the last good browse (so a transient miss doesn't drop its files).
+///
+/// This exists because [`RecentSources`] is a small LRU (search-derived hits),
+/// and a single browse of a large peer (>LRU_CAP files) would self-evict most of
+/// its own entries — leaving the gateway unable to resolve the size/source of
+/// files it just listed, so they couldn't be streamed at all. This map is bounded
+/// by the actual browsable library, not a fixed cap, and never self-evicts.
+#[derive(Default)]
+pub struct BrowseSources {
+    /// peer node id -> (content hash -> size)
+    by_peer: HashMap<String, HashMap<String, u64>>,
+}
+
+impl BrowseSources {
+    /// Replace everything known from `peer` with this browse's results (or drop
+    /// the peer entirely when it served nothing this time).
+    pub fn replace_peer(&mut self, peer: &str, entries: HashMap<String, u64>) {
+        if entries.is_empty() {
+            self.by_peer.remove(peer);
+        } else {
+            self.by_peer.insert(peer.to_string(), entries);
+        }
+    }
+
+    /// A known size for `hash` from any peer that advertises it.
+    pub fn size_of(&self, hash: &str) -> Option<u64> {
+        self.by_peer.values().find_map(|m| m.get(hash).copied()).filter(|&s| s > 0)
+    }
+
+    /// The node ids of peers currently advertising `hash`.
+    pub fn peers_for(&self, hash: &str) -> Vec<String> {
+        self.by_peer
+            .iter()
+            .filter(|(_, m)| m.contains_key(hash))
+            .map(|(p, _)| p.clone())
+            .collect()
     }
 }
