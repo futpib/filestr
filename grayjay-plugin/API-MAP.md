@@ -61,7 +61,9 @@ A playlist is a grouping of files, tagged with its `kind`. A playlist URL is
 `…/playlist/<key>` where the key is one of (`\t`-separated, opaque to Grayjay):
 
 - `folder\t<source>\t<folder>` — a shared folder of one source (the folder is
-  everything before the last `/` of a file's visible `<root>/<rel>` path);
+  everything before the last `/` of a file's visible `<root>/<rel>` path).
+  Folder playlists are **audio/video only**: a folder of nothing but cover
+  art/artwork isn't served, and images don't pad a music folder's track count;
 - `album\t<name>\t<source?>` — files whose `album` tag matches;
 - `artist\t<name>\t<source?>` — files whose `artist` tag matches.
 

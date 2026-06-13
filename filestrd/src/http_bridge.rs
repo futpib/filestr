@@ -331,7 +331,9 @@ async fn list_playlists(state: &Arc<State>, source: Option<&str>, is_head: bool)
         .filter(|f| item_playable(f))
         .filter(|f| source.map_or(true, |s| f.source == s))
         .collect();
-    let folders = group(&items, |f| Some(folder_of(&f.name)), folder_name);
+    // folders: audio/video only, so an artwork/cover-art folder isn't a playlist
+    let av: Vec<&FileItem> = items.iter().copied().filter(|f| is_audio_or_video(f)).collect();
+    let folders = group(&av, |f| Some(folder_of(&f.name)), folder_name);
     let albums = group(&items, |f| f.media.album.clone().filter(|s| !s.is_empty()), str::to_string);
     let artists = group(&items, |f| f.media.artist.clone().filter(|s| !s.is_empty()), str::to_string);
     json_response(
@@ -358,7 +360,9 @@ async fn list_playlist(
         .filter(|f| item_playable(f))
         .filter(|f| want_source.map_or(true, |s| f.source == s))
         .filter(|f| match kind {
-            "folder" => folder_of(&f.name) == key,
+            // folders are audio/video only (matches the /playlists folder grouping),
+            // so a folder playlist never lists cover art / artwork images
+            "folder" => is_audio_or_video(f) && folder_of(&f.name) == key,
             "album" => f.media.album.as_deref() == Some(key),
             "artist" => f.media.artist.as_deref() == Some(key),
             _ => false,
@@ -405,12 +409,24 @@ fn group(
         .collect()
 }
 
-/// Whether a file is media the plugin would play — i.e. its content type (sniffed
-/// at index time, else inferred from the extension) isn't the generic
-/// octet-stream. Matches the plugin's `isPlayable`.
+/// The content type of a file: sniffed at index time, else inferred from the
+/// extension.
+fn item_content_type(f: &FileItem) -> String {
+    f.media.content_type.clone().unwrap_or_else(|| content_type(&f.name).to_string())
+}
+
+/// Whether a file is media the plugin would play — i.e. its content type isn't the
+/// generic octet-stream. Matches the plugin's `isPlayable`.
 fn item_playable(f: &FileItem) -> bool {
-    let ct = f.media.content_type.clone().unwrap_or_else(|| content_type(&f.name).to_string());
-    ct != "application/octet-stream"
+    item_content_type(f) != "application/octet-stream"
+}
+
+/// Whether a file is audio or video. Folder playlists require this so a folder of
+/// nothing but cover art / artwork (images) isn't served as a playlist, and so
+/// images don't pad a music folder's track count. (Album/artist groupings are
+/// tag-based, so untagged images never form one.)
+fn is_audio_or_video(f: &FileItem) -> bool {
+    matches!(item_content_type(f).split('/').next().unwrap_or(""), "audio" | "video")
 }
 
 /// The folder a file lives in: its path minus the last segment ("" at the root).

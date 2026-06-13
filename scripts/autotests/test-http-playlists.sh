@@ -26,6 +26,11 @@ mk gh1.mp3 "Tester" "Greatest Hits" "Hit One"
 mk gh2.mp3 "Tester" "Greatest Hits" "Hit Two"
 mk bs1.mp3 "Tester" "B Sides" "Rarity"
 head -c 4096 /dev/urandom > "$TESTDIR/A/share/notes.bin"   # non-media (octet-stream)
+# an artwork-only subfolder: nothing but images -> must NOT become a playlist
+mkdir -p "$TESTDIR/A/share/artwork"
+ffmpeg -v error -f lavfi -i "color=c=red:s=16x16" -frames:v 1 -y "$TESTDIR/A/share/artwork/cover.jpg"
+# a cover image alongside the music in the root folder -> excluded from its count
+ffmpeg -v error -f lavfi -i "color=c=blue:s=16x16" -frames:v 1 -y "$TESTDIR/A/share/folder.jpg"
 fctl A rescan > /dev/null
 
 BASE="http://127.0.0.1:$PORT"
@@ -45,9 +50,11 @@ jq -e '.albums[]|select(.name=="Greatest Hits")|.count==2' "$TESTDIR/pl.json" >/
 jq -e '.albums[]|select(.name=="B Sides")|.count==1' "$TESTDIR/pl.json" >/dev/null || die "'B Sides' count wrong"
 # one artist with all 3 tracks (NOT 4 — the .bin is excluded)
 jq -e '.artists[]|select(.name=="Tester")|.count==3' "$TESTDIR/pl.json" >/dev/null || die "artist 'Tester' count wrong (non-media leaked?)"
-# the folder grouping excludes the non-media file too: the share root "files"
-# holds 3 media tracks (+ the excluded .bin)
-jq -e '.folders[]|select(.name=="files")|.count==3' "$TESTDIR/pl.json" >/dev/null || die "folder 'files' count wrong"
+# the root folder "files" holds 3 audio tracks; the .bin (non-media) AND the
+# folder.jpg (image) are both excluded from the count
+jq -e '.folders[]|select(.name=="files")|.count==3' "$TESTDIR/pl.json" >/dev/null || die "folder 'files' count wrong (non-media/image leaked?)"
+# an image-only folder ("artwork") is NOT served as a playlist
+jq -e '[.folders[]|select(.name=="artwork")]|length==0' "$TESTDIR/pl.json" >/dev/null || die "image-only folder served as a playlist"
 # folder url key is the full path; album/artist key is the name
 jq -e '.folders[]|select(.name=="files")|.key=="files"' "$TESTDIR/pl.json" >/dev/null || die "folder key should be the path"
 jq -e '.albums[]|select(.name=="Greatest Hits")|.key=="Greatest Hits"' "$TESTDIR/pl.json" >/dev/null || die "album key should be the name"
