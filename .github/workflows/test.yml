@@ -1,0 +1,29 @@
+name: Tests
+
+# Runs the Rust e2e suite (filestrd/tests/e2e_*.rs) on every push/PR. These spawn
+# real daemons on localhost with relays disabled, so no network or secrets are
+# needed. The grayjay JS-plugin tests stay in scripts/autotests/ (they need node
+# + Grayjay's scaffolding) and are not run here.
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+
+      # ffmpeg generates the tagged-media fixtures for e2e_media / e2e_playlists;
+      # without it those tests skip, but CI should exercise them.
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Run e2e tests
+        run: cargo test -p filestrd --features grayjay

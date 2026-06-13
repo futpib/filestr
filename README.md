@@ -114,20 +114,34 @@ byte-range fetch, and several concurrent background downloads. The chat suite
 runs a real Marmot/MLS hub over the iroh nostr tunnel (no external relay):
 bidirectional E2EE messages and the share-to-join file grant.
 
-These are being **migrated from bash to Rust integration tests** (the bash suite
-was sprawling and unreadable — ad-hoc `curl | jq` assertions, `sleep`-based sync,
-copy-pasted setup, `die` on failure). The Rust harness
-([`filestrd/tests/common/`](filestrd/tests/common/mod.rs)) spawns the real daemon
-and drives it over its typed control protocol (`libfilestrctl`) and HTTP gateway,
-with `wait_until` condition-polling instead of fixed sleeps:
+The daemon/data-plane suite is **Rust integration tests** (replacing the old
+sprawling bash — `curl | jq` assertions, `sleep`-based sync, copy-pasted setup,
+`die` on failure). The harness ([`filestrd/tests/common/`](filestrd/tests/common/mod.rs))
+spawns the real daemon and drives it over its typed control protocol
+(`libfilestrctl`) and HTTP gateway, asserting with plain Rust and `wait_until`
+condition-polling instead of fixed sleeps. Run them (and CI runs them, see
+[`.github/workflows/test.yml`](.github/workflows/test.yml)) with:
 
 ```sh
-cargo test -p filestrd --features grayjay     # ported tests (tests/e2e_*.rs)
-scripts/autotests/run-all.sh                  # remaining (not-yet-ported) bash tests
+cargo test -p filestrd --features grayjay
 ```
 
-Ported so far: `e2e_two_node`, `e2e_netdrop`, `e2e_large_peer`. The rest still
-live under `scripts/autotests/` until migrated.
+The `tests/e2e_*.rs` files cover the two-node grant lifecycle, browse-self, share
+add/remove, scan pause/resume, index-cache reuse across restart, the HTTP gateway
+(HEAD/Range/conditional/content-type), federated search, partial-blob reuse,
+peer streaming without over-fetch, the relay-doesn't-cache + ranged/background
+fetches, server-side playlists/related, media metadata + thumbnails, reputation,
+reshare attribution + cycle termination, the network-drop 503 behaviour, the
+large-peer (>LRU) streaming guard, and the full chat plane (hub create/join/
+request/address, persistence across restart, chat-disabled queued join, external
+nostr relay).
+
+Only the **Grayjay JS-plugin** tests remain under `scripts/autotests/` — they run
+the plugin in node against Grayjay's own scaffolding, so they stay bash:
+
+```sh
+scripts/autotests/run-all.sh   # grayjay-*.sh (need node + GRAYJAY_SCRIPTS)
+```
 
 ## Lineage
 
