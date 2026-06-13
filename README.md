@@ -118,6 +118,13 @@ byte-range fetch, and several concurrent background downloads. The chat suite
 runs a real Marmot/MLS hub over the iroh nostr tunnel (no external relay):
 bidirectional E2EE messages and the share-to-join file grant.
 
+> **Tech debt:** the e2e suite is sprawling, unreadable bash — ad-hoc
+> `curl | jq` assertions, `sleep`-based synchronization, copy-pasted setup, and
+> `die "msg"` for failures. It works but is painful to read, extend, and debug.
+> It should be rewritten in a real test framework with a readable language
+> (e.g. Rust integration tests, or a typed harness) with proper fixtures,
+> structured assertions, and no fixed sleeps.
+
 ## Lineage
 
 DC++ (hubs, share-to-join, browsable file lists, TTH→BLAKE3) × RetroShare (friend-to-friend trust graph, recursive search/transfer) × nostr (identity, async E2EE community chat) × iroh (NAT-proof authenticated p2p QUIC).
