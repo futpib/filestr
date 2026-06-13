@@ -13,6 +13,10 @@
 //!   GET /playlist?kind=&key=&source= -> JSON {files,peers}: the tracks of ONE
 //!                            grouping (folder/album/artist), so an opened
 //!                            playlist resolves without a full /files pull
+//!   GET /memberships?hash= -> JSON {source, groups:[{kind,name,key,count,cover}]}:
+//!                            the folder/album/artist playlists ONE file belongs
+//!                            to (scoped to that file's source), for the Grayjay
+//!                            "Recommended" tab on a content page
 //!   GET /peers            -> JSON {peers:[{label,node_id}]}: granted channels
 //!                            (no browse), for creator search
 //!   GET /file/{hash}      -> the bytes, with HTTP Range support (206)
@@ -93,6 +97,19 @@ struct Group {
     cover: Option<String>,
 }
 
+/// One playlist a given file belongs to, for the Grayjay "Recommended" tab — a
+/// `Group` plus the `kind` (folder/album/artist) so the plugin can build the
+/// playlist URL without re-deriving it.
+#[derive(Serialize)]
+struct MemberGroup {
+    kind: &'static str,
+    name: String,
+    key: String,
+    count: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cover: Option<String>,
+}
+
 /// Run the gateway until the process exits.
 pub async fn serve(state: Arc<State>, addr: std::net::SocketAddr) -> Result<()> {
     let listener = TcpListener::bind(addr).await.with_context(|| format!("binding http {addr}"))?;
@@ -156,6 +173,15 @@ async fn route(state: Arc<State>, req: Request<hyper::body::Incoming>) -> Result
         let q: Vec<(String, String)> = req.uri().query().map(url_query).unwrap_or_default();
         let get = |k: &str| q.iter().find(|(kk, _)| kk == k).map(|(_, v)| v.clone()).unwrap_or_default();
         return list_playlist(&state, &get("kind"), &get("key"), &get("source"), is_head).await;
+    }
+    if path == "/memberships" {
+        // ?hash=<file hash>: the folder/album/artist playlists this file is in
+        let hash = req
+            .uri()
+            .query()
+            .and_then(|q| url_query(q).into_iter().find(|(k, _)| k == "hash").map(|(_, v)| v))
+            .unwrap_or_default();
+        return list_memberships(&state, &hash, is_head).await;
     }
     if path == "/peers" {
         return list_peers(&state, is_head).await;
@@ -369,6 +395,66 @@ async fn list_playlist(
         })
         .collect();
     json_response(&serde_json::json!({ "files": files, "peers": peers }), is_head)
+}
+
+/// `/memberships?hash=<hash>`: the playlists ONE file belongs to — its folder
+/// (if it's audio/video), its album tag and its artist tag — each scoped to that
+/// file's own source, so opening one from the Recommended tab resolves to the
+/// same-source collection (and counts/covers match the channel Playlists tab).
+/// Drives the Grayjay content page's Recommended tab: "more from this album /
+/// artist / folder". Empty `groups` when the hash isn't currently servable.
+async fn list_memberships(state: &Arc<State>, hash: &str, is_head: bool) -> Result<Response<Body>> {
+    let (files, _peers) = collect_files(state).await?;
+    // the file in question (must be playable to have any playlist membership)
+    let target = files.iter().find(|f| f.hash == hash && item_playable(f));
+    let Some(target) = target else {
+        return json_response(&serde_json::json!({ "source": "", "groups": [] }), is_head);
+    };
+    let source = target.source.clone();
+    // its siblings: same-source playable files (the scope its playlists resolve in)
+    let siblings: Vec<&FileItem> =
+        files.iter().filter(|f| item_playable(f) && f.source == source).collect();
+
+    // Summarise one grouping (count + a thumbnailed cover) over the siblings that
+    // share `key` under `key_of` — mirrors how `group()` builds a stub.
+    let summarise = |key_of: &dyn Fn(&FileItem) -> Option<String>, key: &str| -> (u64, Option<String>) {
+        let mut count = 0u64;
+        let mut cover = None;
+        for f in &siblings {
+            if key_of(f).as_deref() == Some(key) {
+                count += 1;
+                if cover.is_none() && f.thumb {
+                    cover = Some(f.hash.clone());
+                }
+            }
+        }
+        (count, cover)
+    };
+
+    let mut groups: Vec<MemberGroup> = Vec::new();
+    // folder — only for audio/video (an image's "folder" isn't a playlist), and
+    // the count is audio/video only too, matching the /playlists folder grouping
+    // (cover art doesn't pad a music folder's track count).
+    if is_audio_or_video(target) {
+        let key = folder_of(&target.name);
+        let key_of = |f: &FileItem| is_audio_or_video(f).then(|| folder_of(&f.name));
+        let (count, cover) = summarise(&key_of, &key);
+        groups.push(MemberGroup { kind: "folder", name: folder_name(&key), key, count, cover });
+    }
+    // album tag
+    if let Some(album) = target.media.album.clone().filter(|s| !s.is_empty()) {
+        let key_of = |f: &FileItem| f.media.album.clone().filter(|s| !s.is_empty());
+        let (count, cover) = summarise(&key_of, &album);
+        groups.push(MemberGroup { kind: "album", name: album.clone(), key: album, count, cover });
+    }
+    // artist tag
+    if let Some(artist) = target.media.artist.clone().filter(|s| !s.is_empty()) {
+        let key_of = |f: &FileItem| f.media.artist.clone().filter(|s| !s.is_empty());
+        let (count, cover) = summarise(&key_of, &artist);
+        groups.push(MemberGroup { kind: "artist", name: artist.clone(), key: artist, count, cover });
+    }
+
+    json_response(&serde_json::json!({ "source": source, "groups": groups }), is_head)
 }
 
 /// `/peers`: the granted peers (label + node id) straight from the grant graph —

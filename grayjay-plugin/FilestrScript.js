@@ -233,6 +233,27 @@ source.getPlaylist = function (url) {
         contents: new FilestrVideoPager(files.map(fileToVideo)),
     });
 };
+// "Recommended" tab on a content page: filestr has no recommendation engine
+// (it's F2F, not a platform), but the natural sibling content for a track is the
+// other playlists it belongs to — its folder, its album and its artist. So we
+// surface those, scoped to the file's own source, as the recommendations. The
+// daemon resolves the memberships (GET /memberships?hash=) so this is one small
+// request, and opening one lands on the same playlist as the channel's Playlists
+// tab.
+source.getContentRecommendations = function (url) {
+    const { hash } = parseFileUrl(url);
+    if (!hash)
+        return new FilestrContentPager([]);
+    const res = fetchMemberships(hash);
+    const src = res.source || "local";
+    const out = [];
+    for (const g of res.groups || []) {
+        if (g.kind === "folder" || g.kind === "album" || g.kind === "artist") {
+            out.push(groupStub(g.kind, g, src));
+        }
+    }
+    return new FilestrContentPager(out);
+};
 source.getContentDetails = function (url) {
     const { hash, name } = parseFileUrl(url);
     // Find the matching file for accurate name/size; fall back to the URL.
@@ -324,6 +345,11 @@ function fetchPlaylistFiles(p) {
     const q = `/playlist?kind=${encodeURIComponent(p.kind)}` +
         `&key=${encodeURIComponent(key)}&source=${encodeURIComponent(p.source || "")}`;
     return gatewayJson(q).files || [];
+}
+// The playlists one file belongs to (folder/album/artist), resolved by the
+// daemon (GET /memberships) so the Recommended tab is one small request.
+function fetchMemberships(hash) {
+    return gatewayJson(`/memberships?hash=${encodeURIComponent(hash)}`);
 }
 // Everything this node can serve (its shares + a one-hop browse of peers).
 function fetchFiles() {
@@ -574,6 +600,16 @@ class FilestrChannelPager extends ChannelPager {
     }
     nextPage() {
         return new FilestrChannelPager([]);
+    }
+}
+// The Recommended tab takes a ContentPager (mixed content); we fill it with the
+// playlists the current file belongs to.
+class FilestrContentPager extends ContentPager {
+    constructor(results) {
+        super(results, false);
+    }
+    nextPage() {
+        return new FilestrContentPager([]);
     }
 }
 console.log("filestr plugin loaded");

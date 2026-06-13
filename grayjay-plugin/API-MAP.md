@@ -19,6 +19,7 @@ empty stub is used.
 | `searchChannels(query)` | search screen **Creators tab**: your peers (+ this node) matched by label, from the lightweight `/peers` grant list (no browse) |
 | `searchPlaylists(query)` | search screen **Playlists tab**: album/artist groupings across the reachable library, matched by name |
 | `getChannelPlaylists(url)` | the channel's **Playlists tab**: that source's folders + album tags + artist tags as playlist stubs (login-free; the primary way to browse) |
+| `getContentRecommendations(url)` | the content page's **Recommended tab**: the playlists the current file belongs to — its folder + album tag + artist tag, scoped to the file's source — from `/memberships?hash=` |
 | `isPlaylistUrl` / `getPlaylist` / `getUserPlaylists` | **a playlist = a folder / album tag / artist tag**; `getPlaylist` resolves a `/playlist/<kind>…` URL to its tracks, `getUserPlaylists` lists the whole library's groupings (used only by Grayjay's logged-in "Import playlists" flow) |
 
 ## Backable but not yet implemented
@@ -36,7 +37,6 @@ empty stub is used.
 | `getComments` / `getSubComments` | a file-sharing graph has no comments |
 | `getShorts()` | no "shorts" notion |
 | live chat / live events | no live streaming |
-| `getContentRecommendations` | no recommendation engine (F2F, not a platform) |
 | `getPlaybackTracker` | no view/watch-tracking backend |
 | Polycentric claim mapping (`primaryClaimFieldType`, claim types) | filestr isn't a Polycentric identity platform |
 | `disable()` / client-side saved state | nothing to tear down or persist |
@@ -72,7 +72,7 @@ reachable library), so the same album name from two peers stays distinct and an
 offline peer's playlist resolves to nothing rather than another peer's tracks.
 `getPlaylist` resolves an opened playlist to its tracks via
 `GET /playlist?kind=&key=&source=` (returns `{files, peers}`) — the daemon does
-the filtering, so it's one small request, not a full `/files` pull. Two surfaces
+the filtering, so it's one small request, not a full `/files` pull. Three surfaces
 produce the playlist lists themselves:
 
 - **`getChannelPlaylists(channelUrl)`** — a peer's (or `local`'s) folders +
@@ -88,6 +88,13 @@ produce the playlist lists themselves:
   folders + global album/artist tags), for Grayjay's "Import playlists" migration
   (only offered for logged-in sources, so not reachable for filestr today, but
   kept correct). Also built from `/playlists`, not a raw `/files` pull.
+- **`getContentRecommendations(fileUrl)`** — the **Recommended tab** on a content
+  page: the playlists *this file* belongs to (its folder + album tag + artist
+  tag), scoped to the file's own source so opening one lands on the same
+  collection as the channel's Playlists tab. Resolved server-side via
+  `GET /memberships?hash=<hash>` (returns `{source, groups:[{kind, name, key,
+  count, cover}]}`); the folder count is audio/video only, like `/playlists`.
+  A non-media file or unknown hash returns no groups.
 
 So a shared `music/` folder appears as a folder playlist, a tagged collection as
 one album/artist playlist per tag — all grouped/resolved by the daemon

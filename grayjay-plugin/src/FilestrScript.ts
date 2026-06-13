@@ -54,6 +54,16 @@ interface PlaylistsResponse {
 	peers?: PeerStatus[];
 }
 
+// One playlist a given file belongs to (a PlaylistGroup tagged with its kind),
+// as the gateway's /memberships endpoint serves it.
+interface MemberGroup extends PlaylistGroup {
+	kind: "folder" | "album" | "artist";
+}
+interface MembershipsResponse {
+	source?: string;
+	groups?: MemberGroup[];
+}
+
 const PLATFORM = "filestr";
 let PLUGIN_ID = "filestr";
 let BASE_URL = "http://127.0.0.1:11780";
@@ -292,6 +302,27 @@ source.getPlaylist = function (url) {
 	});
 };
 
+// "Recommended" tab on a content page: filestr has no recommendation engine
+// (it's F2F, not a platform), but the natural sibling content for a track is the
+// other playlists it belongs to — its folder, its album and its artist. So we
+// surface those, scoped to the file's own source, as the recommendations. The
+// daemon resolves the memberships (GET /memberships?hash=) so this is one small
+// request, and opening one lands on the same playlist as the channel's Playlists
+// tab.
+source.getContentRecommendations = function (url) {
+	const { hash } = parseFileUrl(url);
+	if (!hash) return new FilestrContentPager([]);
+	const res = fetchMemberships(hash);
+	const src = res.source || "local";
+	const out: PlatformPlaylist[] = [];
+	for (const g of res.groups || []) {
+		if (g.kind === "folder" || g.kind === "album" || g.kind === "artist") {
+			out.push(groupStub(g.kind, g, src));
+		}
+	}
+	return new FilestrContentPager(out);
+};
+
 source.getContentDetails = function (url) {
 	const { hash, name } = parseFileUrl(url);
 	// Find the matching file for accurate name/size; fall back to the URL.
@@ -395,6 +426,12 @@ function fetchPlaylistFiles(p: ParsedPlaylist): FileEntry[] {
 		`/playlist?kind=${encodeURIComponent(p.kind)}` +
 		`&key=${encodeURIComponent(key)}&source=${encodeURIComponent(p.source || "")}`;
 	return (gatewayJson(q) as IndexResponse).files || [];
+}
+
+// The playlists one file belongs to (folder/album/artist), resolved by the
+// daemon (GET /memberships) so the Recommended tab is one small request.
+function fetchMemberships(hash: string): MembershipsResponse {
+	return gatewayJson(`/memberships?hash=${encodeURIComponent(hash)}`) as MembershipsResponse;
 }
 
 // Everything this node can serve (its shares + a one-hop browse of peers).
@@ -683,6 +720,17 @@ class FilestrChannelPager extends ChannelPager {
 	}
 	nextPage(): FilestrChannelPager {
 		return new FilestrChannelPager([]);
+	}
+}
+
+// The Recommended tab takes a ContentPager (mixed content); we fill it with the
+// playlists the current file belongs to.
+class FilestrContentPager extends ContentPager {
+	constructor(results: IPlatformContent[]) {
+		super(results, false);
+	}
+	nextPage(): FilestrContentPager {
+		return new FilestrContentPager([]);
 	}
 }
 

@@ -87,4 +87,27 @@ curl -s -o "$TESTDIR/trk.mp3" "$BASE/file/$H"
 # empty source = whole library (still finds the artist here)
 [ "$(curl -s "$BASE/playlist?kind=artist&key=Tester&source=" | jq '.files|length')" = "3" ] || die "/playlist empty source should span library"
 
+# --- the playlists ONE file belongs to (GET /memberships) ---------------------
+# gh1.mp3 is in folder "files", album "Greatest Hits", artist "Tester": the
+# Recommended tab should offer exactly those three, with the right kinds/counts.
+GH1="$(curl -s "$BASE/files" | jq -r '.files[]|select(.name|endswith("gh1.mp3"))|.hash')"
+[ -n "$GH1" ] || die "could not find gh1.mp3 hash"
+curl -s "$BASE/memberships?hash=$GH1" > "$TESTDIR/mem.json"
+echo "memberships: $(cat "$TESTDIR/mem.json")"
+[ "$(jq -r '.source' "$TESTDIR/mem.json")" = "local" ] || die "membership source wrong"
+jq -e '.groups[]|select(.kind=="folder")|.name=="files" and .key=="files" and .count==3' "$TESTDIR/mem.json" >/dev/null || die "folder membership wrong"
+jq -e '.groups[]|select(.kind=="album")|.name=="Greatest Hits" and .count==2' "$TESTDIR/mem.json" >/dev/null || die "album membership wrong"
+jq -e '.groups[]|select(.kind=="artist")|.name=="Tester" and .count==3' "$TESTDIR/mem.json" >/dev/null || die "artist membership wrong"
+# exactly three memberships (folder + album + artist), no extras
+[ "$(jq '.groups|length' "$TESTDIR/mem.json")" = "3" ] || die "expected exactly 3 memberships"
+# resolving a recommended playlist (album) lands on the same 2 tracks
+[ "$(curl -s "$BASE/playlist?kind=album&key=Greatest%20Hits&source=local" | jq '.files|length')" = "2" ] || die "recommended album did not resolve to its tracks"
+# a non-media file has no playlist memberships (notes.bin is octet-stream)
+BIN="$(curl -s "$BASE/files" | jq -r '.files[]|select(.name|endswith("notes.bin"))|.hash // empty')"
+if [ -n "$BIN" ]; then
+    [ "$(curl -s "$BASE/memberships?hash=$BIN" | jq '.groups|length')" = "0" ] || die "non-media file should have no memberships"
+fi
+# an unknown hash is well-formed and empty
+[ "$(curl -s "$BASE/memberships?hash=deadbeef" | jq '.groups|length')" = "0" ] || die "unknown hash should have no memberships"
+
 echo OK
