@@ -234,12 +234,13 @@ source.getPlaylist = function (url) {
     });
 };
 // "Recommended" tab on a content page: filestr has no recommendation engine
-// (it's F2F, not a platform), but the natural sibling content for a track is the
-// other playlists it belongs to — its folder, its album and its artist. So we
-// surface those, scoped to the file's own source, as the recommendations. The
-// daemon resolves the memberships (GET /memberships?hash=) so this is one small
-// request, and opening one lands on the same playlist as the channel's Playlists
-// tab.
+// (it's F2F, not a platform), but the natural related content for a track is the
+// rest of the collections it belongs to — more from the same album, folder and
+// artist. The daemon resolves those siblings (GET /related?hash=) within the
+// file's own source. Grayjay renders the Recommended tab as a content feed (it
+// shows content, not playlist cards), so we return the sibling files as videos;
+// to browse the album/artist/folder as playlists, the channel's Playlists tab
+// (getChannelPlaylists) is the surface.
 //
 // Grayjay drives the Recommended tab from getContentRecommendations on the
 // content-details object (IPlatformVideoDetailsDef), so we attach it there (see
@@ -249,26 +250,20 @@ source.getContentRecommendations = function (url) {
     const { hash } = parseFileUrl(url);
     return recommendationsFor(hash);
 };
-// The playlists a file (by hash) belongs to, as a ContentPager of playlist
-// stubs. Empty when the hash is unknown or the gateway is unreachable.
+// Related content for a file (by hash): the sibling tracks from the same
+// album/folder/artist, as a ContentPager of videos. Empty when the hash is
+// unknown or the gateway is unreachable.
 function recommendationsFor(hash) {
     if (!hash)
         return new FilestrContentPager([]);
-    let res;
+    let files;
     try {
-        res = fetchMemberships(hash);
+        files = fetchRelated(hash);
     }
     catch (e) {
         return new FilestrContentPager([]);
     }
-    const src = res.source || "local";
-    const out = [];
-    for (const g of res.groups || []) {
-        if (g.kind === "folder" || g.kind === "album" || g.kind === "artist") {
-            out.push(groupStub(g.kind, g, src));
-        }
-    }
-    return new FilestrContentPager(out);
+    return new FilestrContentPager(files.filter(isPlayable).map(fileToVideo));
 }
 source.getContentDetails = function (url) {
     const { hash, name } = parseFileUrl(url);
@@ -364,10 +359,11 @@ function fetchPlaylistFiles(p) {
         `&key=${encodeURIComponent(key)}&source=${encodeURIComponent(p.source || "")}`;
     return gatewayJson(q).files || [];
 }
-// The playlists one file belongs to (folder/album/artist), resolved by the
-// daemon (GET /memberships) so the Recommended tab is one small request.
-function fetchMemberships(hash) {
-    return gatewayJson(`/memberships?hash=${encodeURIComponent(hash)}`);
+// Sibling files from the playlists one file belongs to (same album/folder/
+// artist), resolved by the daemon (GET /related) so the Recommended tab is one
+// small request.
+function fetchRelated(hash) {
+    return gatewayJson(`/related?hash=${encodeURIComponent(hash)}`).files || [];
 }
 // Everything this node can serve (its shares + a one-hop browse of peers).
 function fetchFiles() {

@@ -87,27 +87,27 @@ curl -s -o "$TESTDIR/trk.mp3" "$BASE/file/$H"
 # empty source = whole library (still finds the artist here)
 [ "$(curl -s "$BASE/playlist?kind=artist&key=Tester&source=" | jq '.files|length')" = "3" ] || die "/playlist empty source should span library"
 
-# --- the playlists ONE file belongs to (GET /memberships) ---------------------
-# gh1.mp3 is in folder "files", album "Greatest Hits", artist "Tester": the
-# Recommended tab should offer exactly those three, with the right kinds/counts.
+# --- sibling tracks for the Recommended tab (GET /related) --------------------
+# gh1.mp3 is in album "Greatest Hits" (with gh2), folder "files" (with gh2, bs1)
+# and artist "Tester" (gh2, bs1). Related = the union minus itself = {gh2, bs1},
+# all by Tester, never gh1 and never the non-media/image files.
 GH1="$(curl -s "$BASE/files" | jq -r '.files[]|select(.name|endswith("gh1.mp3"))|.hash')"
 [ -n "$GH1" ] || die "could not find gh1.mp3 hash"
-curl -s "$BASE/memberships?hash=$GH1" > "$TESTDIR/mem.json"
-echo "memberships: $(cat "$TESTDIR/mem.json")"
-[ "$(jq -r '.source' "$TESTDIR/mem.json")" = "local" ] || die "membership source wrong"
-jq -e '.groups[]|select(.kind=="folder")|.name=="files" and .key=="files" and .count==3' "$TESTDIR/mem.json" >/dev/null || die "folder membership wrong"
-jq -e '.groups[]|select(.kind=="album")|.name=="Greatest Hits" and .count==2' "$TESTDIR/mem.json" >/dev/null || die "album membership wrong"
-jq -e '.groups[]|select(.kind=="artist")|.name=="Tester" and .count==3' "$TESTDIR/mem.json" >/dev/null || die "artist membership wrong"
-# exactly three memberships (folder + album + artist), no extras
-[ "$(jq '.groups|length' "$TESTDIR/mem.json")" = "3" ] || die "expected exactly 3 memberships"
-# resolving a recommended playlist (album) lands on the same 2 tracks
-[ "$(curl -s "$BASE/playlist?kind=album&key=Greatest%20Hits&source=local" | jq '.files|length')" = "2" ] || die "recommended album did not resolve to its tracks"
-# a non-media file has no playlist memberships (notes.bin is octet-stream)
+curl -s "$BASE/related?hash=$GH1" > "$TESTDIR/rel.json"
+echo "related: $(cat "$TESTDIR/rel.json")"
+[ "$(jq '.files|length' "$TESTDIR/rel.json")" = "2" ] || die "/related wrong sibling count"
+jq -e 'all(.files[]; .media.artist=="Tester")' "$TESTDIR/rel.json" >/dev/null || die "/related returned a non-sibling"
+jq -e "all(.files[]; .hash!=\"$GH1\")" "$TESTDIR/rel.json" >/dev/null || die "/related must exclude the file itself"
+jq -e 'all(.files[]; (.media.content_type|tostring|startswith("audio") or startswith("video")))' "$TESTDIR/rel.json" >/dev/null || die "/related leaked a non-media/image file"
+# bs1.mp3 (album "B Sides", alone) still has folder+artist siblings (gh1, gh2)
+BS1="$(curl -s "$BASE/files" | jq -r '.files[]|select(.name|endswith("bs1.mp3"))|.hash')"
+[ "$(curl -s "$BASE/related?hash=$BS1" | jq '.files|length')" = "2" ] || die "/related for bs1 wrong count"
+# a non-media file has no related siblings (notes.bin is octet-stream)
 BIN="$(curl -s "$BASE/files" | jq -r '.files[]|select(.name|endswith("notes.bin"))|.hash // empty')"
 if [ -n "$BIN" ]; then
-    [ "$(curl -s "$BASE/memberships?hash=$BIN" | jq '.groups|length')" = "0" ] || die "non-media file should have no memberships"
+    [ "$(curl -s "$BASE/related?hash=$BIN" | jq '.files|length')" = "0" ] || die "non-media file should have no related siblings"
 fi
 # an unknown hash is well-formed and empty
-[ "$(curl -s "$BASE/memberships?hash=deadbeef" | jq '.groups|length')" = "0" ] || die "unknown hash should have no memberships"
+[ "$(curl -s "$BASE/related?hash=deadbeef" | jq '.files|length')" = "0" ] || die "unknown hash should have no related siblings"
 
 echo OK
