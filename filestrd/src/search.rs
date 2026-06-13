@@ -288,6 +288,11 @@ pub async fn fetch_source(
     progress: &mpsc::Sender<u64>,
 ) -> Result<()> {
     let parsed: iroh_blobs::Hash = hash.parse().map_err(|e| anyhow!("bad hash {hash}: {e}"))?;
+    // Idle timeout: bound every wait on the peer so a radio drop fails fast
+    // (seconds) instead of hanging until QUIC's ~30s idle timeout. The gateway
+    // turns a fast failure into a retryable error for the player.
+    let io_timeout =
+        Duration::from_secs(state.config.read().await.search.io_timeout_secs.max(1));
     let conn = connect(state, peer, p2p::ALPN).await?;
     let (mut send, mut recv) = conn.open_bi().await.context("open_bi")?;
     // header naming the source handle + hash; the rest of the stream is iroh-blobs
@@ -298,7 +303,10 @@ pub async fn fetch_source(
     .context("send get header")?;
 
     // the serving end (origin, possibly through relays) acks or denies first
-    match crate::p2p::read_line_raw(&mut recv, p2p::MAX_LINE).await? {
+    let ack = tokio::time::timeout(io_timeout, crate::p2p::read_line_raw(&mut recv, p2p::MAX_LINE))
+        .await
+        .map_err(|_| anyhow!("source {} did not answer within {io_timeout:?}", peer.node_id))??;
+    match ack {
         Some(line) => match serde_json::from_str::<P2pResponse>(&line) {
             Ok(P2pResponse::GetOk) => {}
             Ok(P2pResponse::Error { code, message }) => {
@@ -313,7 +321,16 @@ pub async fn fetch_source(
     let request = get_request(parsed, range);
     let mut received = 0u64;
     let mut stream = state.store.remote().execute_get(pair, request).stream();
-    while let Some(item) = stream.next().await {
+    loop {
+        // Each step is bounded: a stalled peer (no bytes for io_timeout) aborts
+        // rather than hanging the whole stream.
+        let item = match tokio::time::timeout(io_timeout, stream.next()).await {
+            Ok(Some(item)) => item,
+            Ok(None) => return Err(anyhow!("transfer stream closed without completing")),
+            Err(_) => {
+                return Err(anyhow!("transfer from {} stalled for {io_timeout:?}", peer.node_id));
+            }
+        };
         match item {
             GetProgressItem::Progress(n) => {
                 received = n;
@@ -329,7 +346,6 @@ pub async fn fetch_source(
             }
         }
     }
-    Err(anyhow!("transfer stream closed without completing"))
 }
 
 /// Serve a `Get` request from our own store on the given stream halves. The

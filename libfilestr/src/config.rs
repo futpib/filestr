@@ -162,6 +162,11 @@ pub struct SearchConfig {
     /// under a second, so a long wait here only ever delays giving up on a dead
     /// peer — which used to stall every federated search for the full 10s.
     pub connect_timeout_secs: u64,
+    /// Idle timeout for an in-flight transfer, seconds: if a peer stops
+    /// delivering bytes for this long mid-fetch (e.g. the radio drops), give up
+    /// instead of hanging until QUIC's ~30s idle timeout. Fail fast so the
+    /// gateway can surface a retryable error to the player promptly.
+    pub io_timeout_secs: u64,
 }
 
 impl Default for SearchConfig {
@@ -173,6 +178,7 @@ impl Default for SearchConfig {
             result_cap: 500,
             browse_timeout_secs: 4,
             connect_timeout_secs: 4,
+            io_timeout_secs: 10,
         }
     }
 }

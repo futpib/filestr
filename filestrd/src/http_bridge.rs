@@ -704,9 +704,16 @@ async fn serve_file(
     // maths and Content-Length need it up front; the bytes are fetched on
     // demand below. (`known_size` answers from the local store, the share
     // index, or a recent browse.)
+    //
+    // Unknown size means this hash isn't local and we have no live source for it
+    // right now — almost always a peer file we can't reach or haven't browsed
+    // this session (e.g. after a restart), not a permanently-missing resource.
+    // Answer 503 (retryable), NOT 404: players treat 404 as fatal and cache the
+    // item as gone, so a transient outage would "stick" until the app restarts —
+    // exactly the "it caches the brokenness forever" report.
     let size = match known_size(state, parsed, hash).await {
         Some(s) => s,
-        None => return Ok(text(StatusCode::NOT_FOUND, "unknown hash".into())),
+        None => return Ok(unavailable("source unavailable (peer unreachable or not yet browsed)".into())),
     };
 
     // If-Range: only honour the Range when the validator still matches; an
@@ -744,6 +751,17 @@ async fn serve_file(
     } else if complete {
         stream_local(state, parsed, start, end_excl)
     } else {
+        // Not local yet. Pull the first window from the peer BEFORE committing a
+        // 2xx, so we only promise a body we can actually start delivering. If the
+        // peer can't deliver it (radio dropped, peer offline), fail fast with a
+        // retryable 503 — never a 206/200 whose body then truncates, which a
+        // player reads as a corrupt/broken stream that play/pause won't recover
+        // (only a re-request/seek would). Once the first window is in hand,
+        // stream_windowed serves it and fetches the rest as the player reads.
+        if let Err(e) = prefetch_window(state, parsed, hash, start, end_excl).await {
+            tracing::debug!("prefetch {hash} [{start}..{end_excl}) failed: {e:#}");
+            return Ok(unavailable(format!("source unavailable: {e}")));
+        }
         stream_windowed(state.clone(), parsed, hash.to_string(), start, end_excl)
     };
 
@@ -777,6 +795,35 @@ async fn serve_file(
 /// Max bytes emitted per frame when piping a peer blob through — bounds the
 /// per-frame memory of `concatenate` while still yielding as data arrives.
 const MAX_EMIT: u64 = 1024 * 1024;
+
+/// How much of a not-yet-local range to pull from the peer before committing a
+/// 2xx (see `prefetch_window`). Small, to keep first-byte latency low — just
+/// enough to prove the source is delivering; the rest streams as the player reads.
+const PREFETCH_WINDOW: u64 = 256 * 1024;
+
+/// Pull the first `PREFETCH_WINDOW` of `[start, end_excl)` into the local store,
+/// so the gateway only sends a success status once bytes are actually flowing.
+/// Returns `Err` if the source can't deliver — the caller turns that into a
+/// retryable 503 rather than a 2xx whose body would truncate. A no-op when that
+/// window is already present (a re-seek into an already-fetched region).
+async fn prefetch_window(
+    state: &Arc<State>,
+    _parsed: iroh_blobs::Hash,
+    hash: &str,
+    start: u64,
+    end_excl: u64,
+) -> Result<()> {
+    let first_end = end_excl.min(start + PREFETCH_WINDOW);
+    if first_end <= start {
+        return Ok(());
+    }
+    // throwaway progress sink: drop the receiver so fetch_range's progress
+    // sends fail fast (ignored) instead of blocking on a full channel — we
+    // don't surface prefetch progress, only success/failure.
+    let (tx, rx) = tokio::sync::mpsc::channel::<u64>(1);
+    drop(rx);
+    transfers::fetch_range(state, hash, start, first_end - 1, &tx).await
+}
 
 /// Stream `[start, end_excl)` of a fully-local blob straight from the store,
 /// per leaf, clipping to the exact byte range. Zero extra buffering.
@@ -1077,6 +1124,20 @@ fn text(status: StatusCode, msg: String) -> Response<Body> {
     Response::builder()
         .status(status)
         .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+        .body(full(msg))
+        .unwrap()
+}
+
+/// A retryable "the source isn't available right now" response. 503 (not 404):
+/// media players retry 503 with backoff but treat 404 as fatal and cache the
+/// item as permanently gone. `Retry-After` nudges a prompt retry once the radio
+/// is back. Used when a peer file can't be reached/resolved at request time.
+fn unavailable(msg: String) -> Response<Body> {
+    Response::builder()
+        .status(StatusCode::SERVICE_UNAVAILABLE)
+        .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+        .header(header::RETRY_AFTER, "1")
+        .header("access-control-allow-origin", "*")
         .body(full(msg))
         .unwrap()
 }
