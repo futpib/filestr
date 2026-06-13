@@ -105,10 +105,6 @@ relays). Default is zero external infrastructure — hubs ride the iroh tunnel.
 
 ## Tests
 
-```sh
-scripts/autotests/run-all.sh
-```
-
 Hermetic multi-daemon e2e on localhost (relay disabled): two-node grant
 lifecycle, three-node reshare chain asserting zero origin attribution in
 results, relayed verified fetch, search-cycle termination, the
@@ -118,12 +114,20 @@ byte-range fetch, and several concurrent background downloads. The chat suite
 runs a real Marmot/MLS hub over the iroh nostr tunnel (no external relay):
 bidirectional E2EE messages and the share-to-join file grant.
 
-> **Tech debt:** the e2e suite is sprawling, unreadable bash — ad-hoc
-> `curl | jq` assertions, `sleep`-based synchronization, copy-pasted setup, and
-> `die "msg"` for failures. It works but is painful to read, extend, and debug.
-> It should be rewritten in a real test framework with a readable language
-> (e.g. Rust integration tests, or a typed harness) with proper fixtures,
-> structured assertions, and no fixed sleeps.
+These are being **migrated from bash to Rust integration tests** (the bash suite
+was sprawling and unreadable — ad-hoc `curl | jq` assertions, `sleep`-based sync,
+copy-pasted setup, `die` on failure). The Rust harness
+([`filestrd/tests/common/`](filestrd/tests/common/mod.rs)) spawns the real daemon
+and drives it over its typed control protocol (`libfilestrctl`) and HTTP gateway,
+with `wait_until` condition-polling instead of fixed sleeps:
+
+```sh
+cargo test -p filestrd --features grayjay     # ported tests (tests/e2e_*.rs)
+scripts/autotests/run-all.sh                  # remaining (not-yet-ported) bash tests
+```
+
+Ported so far: `e2e_two_node`, `e2e_netdrop`, `e2e_large_peer`. The rest still
+live under `scripts/autotests/` until migrated.
 
 ## Lineage
 
