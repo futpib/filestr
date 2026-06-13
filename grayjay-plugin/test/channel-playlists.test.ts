@@ -1,10 +1,10 @@
 // Port of test-grayjay-channel-playlists.sh — getChannelPlaylists returns lazy
 // stubs (name+count, no contents) scoped to a source; getPlaylist resolves one.
 
-const { test } = require("node:test");
-const assert = require("node:assert");
-const { Daemon, available, haveFfmpeg } = require("./harness/daemon");
-const { loadSource } = require("./harness/plugin");
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { Daemon, available, haveFfmpeg } from "./harness/daemon.ts";
+import { loadSource } from "./harness/plugin.ts";
 
 const skip = !available()
 	? "filestrd/filestrctl/grayjay scaffolding not present"
@@ -33,16 +33,16 @@ test("channel Playlists tab returns lazy stubs that resolve", { skip }, async ()
 
 		assert.ok(stubs.length >= 3, "expected folder+album+artist stubs");
 		assert.ok(stubs.every((s) => s.hasContents === false), "stub carried contents (should be lazy)");
-		assert.ok(stubs.every((s) => /\/playlist\//.test(s.url)), "stub missing playlist url");
-		assert.strictEqual(stubs.filter((s) => s.name === "Tester").length, 1, "no single artist stub");
-		assert.strictEqual(stubs.find((s) => s.name === "Tester").count, 3, "artist stub count");
-		assert.strictEqual(stubs.find((s) => s.name === "Greatest Hits").count, 2, "album count");
-		assert.strictEqual(stubs.find((s) => s.name === "B Sides").count, 1, "B Sides count");
+		assert.ok(stubs.every((s) => /\/playlist\//.test(String(s.url))), "stub missing playlist url");
+		assert.equal(stubs.filter((s) => s.name === "Tester").length, 1, "no single artist stub");
+		assert.equal(stubs.find((s) => s.name === "Tester")?.count, 3, "artist stub count");
+		assert.equal(stubs.find((s) => s.name === "Greatest Hits")?.count, 2, "album count");
+		assert.equal(stubs.find((s) => s.name === "B Sides")?.count, 1, "B Sides count");
 
 		const art = pager.results.find((p) => p.name === "Tester");
-		const det = source.getPlaylist(art.url);
-		assert.strictEqual(det.videoCount, 3, "resolved artist playlist count");
-		assert.match(det.contents.results[0].url, /\/file\//, "resolved track not playable");
+		const det = source.getPlaylist(String(art?.url));
+		assert.equal(det.videoCount, 3, "resolved artist playlist count");
+		assert.match(String(det.contents?.results[0].url), /\/file\//, "resolved track not playable");
 	} finally {
 		a.stop();
 	}

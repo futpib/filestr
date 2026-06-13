@@ -1,10 +1,10 @@
 // Port of test-grayjay-album-artist.sh — getUserPlaylists groups by embedded
 // album/artist tags (across the library), getPlaylist resolves each.
 
-const { test } = require("node:test");
-const assert = require("node:assert");
-const { Daemon, available, haveFfmpeg } = require("./harness/daemon");
-const { loadSource } = require("./harness/plugin");
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { Daemon, available, haveFfmpeg } from "./harness/daemon.ts";
+import { loadSource } from "./harness/plugin.ts";
 
 const skip = !available()
 	? "filestrd/filestrctl/grayjay scaffolding not present"
@@ -25,18 +25,22 @@ test("library groups by album/artist tags", { skip }, async () => {
 		const source = loadSource(a.baseUrl());
 		const pls = source.getUserPlaylists().map((u) => {
 			const p = source.getPlaylist(u);
-			return { name: p.name, count: p.videoCount, isPl: source.isPlaylistUrl(u),
-				first: p.contents && p.contents.results[0] ? p.contents.results[0].url : null };
+			return {
+				name: p.name,
+				count: p.videoCount,
+				isPl: source.isPlaylistUrl(u),
+				first: p.contents?.results[0] ? p.contents.results[0].url : null,
+			};
 		});
 
 		const tester = pls.filter((p) => p.name === "Tester");
-		assert.strictEqual(tester.length, 1, "expected one 'Tester' artist playlist");
-		assert.strictEqual(tester[0].count, 3, "artist playlist wrong count");
-		assert.strictEqual(tester[0].isPl, true, "isPlaylistUrl false for artist");
-		assert.match(tester[0].first, /\/file\//, "artist track not playable");
+		assert.equal(tester.length, 1, "expected one 'Tester' artist playlist");
+		assert.equal(tester[0].count, 3, "artist playlist wrong count");
+		assert.equal(tester[0].isPl, true, "isPlaylistUrl false for artist");
+		assert.match(String(tester[0].first), /\/file\//, "artist track not playable");
 
-		assert.strictEqual(pls.find((p) => p.name === "Greatest Hits").count, 2, "Greatest Hits count");
-		assert.strictEqual(pls.find((p) => p.name === "B Sides").count, 1, "B Sides count");
+		assert.equal(pls.find((p) => p.name === "Greatest Hits")?.count, 2, "Greatest Hits count");
+		assert.equal(pls.find((p) => p.name === "B Sides")?.count, 1, "B Sides count");
 	} finally {
 		a.stop();
 	}

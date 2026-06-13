@@ -3,21 +3,23 @@
 // (relay disabled, hermetic on localhost). Readable setup with condition-polling
 // instead of bash `sleep`s.
 
-const fs = require("fs");
-const os = require("os");
-const path = require("path");
-const { spawnSync, spawn, execFileSync } = require("child_process");
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 
-const ROOT = path.resolve(__dirname, "..", "..", "..");
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+export const ROOT = path.resolve(HERE, "..", "..", "..");
 const BIN = path.join(ROOT, "target", "debug");
 const FILESTRD = path.join(BIN, "filestrd");
 const FILESTRCTL = path.join(BIN, "filestrctl");
-const SCAFFOLD =
+export const SCAFFOLD =
 	process.env.GRAYJAY_SCRIPTS ||
 	path.join(ROOT, "..", "grayjay-android", "app", "src", "main", "assets", "scripts");
 
-/// Whether the prerequisites for the plugin tests are present; otherwise skip.
-function available() {
+/** Whether the prerequisites for the plugin tests are present; otherwise skip. */
+export function available(): boolean {
 	return (
 		fs.existsSync(FILESTRD) &&
 		fs.existsSync(FILESTRCTL) &&
@@ -25,10 +27,15 @@ function available() {
 	);
 }
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+export const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
-/// Poll `cond` (sync or async) until truthy or the timeout elapses, then throw.
-async function waitUntil(what, cond, timeoutMs = 20000, stepMs = 100) {
+/** Poll `cond` (sync or async) until truthy or the timeout elapses, then throw. */
+export async function waitUntil(
+	what: string,
+	cond: () => boolean | Promise<boolean>,
+	timeoutMs = 20000,
+	stepMs = 100,
+): Promise<void> {
 	const deadline = Date.now() + timeoutMs;
 	for (;;) {
 		if (await cond()) return;
@@ -37,20 +44,35 @@ async function waitUntil(what, cond, timeoutMs = 20000, stepMs = 100) {
 	}
 }
 
-class Daemon {
-	constructor(name) {
+export interface NodeOpts {
+	share?: boolean;
+	httpPort?: number;
+	extraConfig?: string;
+}
+
+interface FilesResponse {
+	files: { name: string; hash: string; size: number; source: string; media?: { artist?: string } }[];
+	peers?: { label: string; node_id: string; reachable: boolean }[];
+}
+
+export class Daemon {
+	readonly name: string;
+	readonly dir: string;
+	private readonly socket: string;
+	private httpPort: number | null = null;
+	private proc: ChildProcess | null = null;
+
+	private constructor(name: string) {
 		this.name = name;
 		this.dir = fs.mkdtempSync(path.join(os.tmpdir(), `filestr-node-${name}-`));
 		this.socket = path.join(this.dir, "ctl.sock");
-		this.httpPort = null;
-		this.proc = null;
 	}
 
-	/// start(name, {share, httpPort, extraConfig})
-	static async start(name, opts = {}) {
+	/** Spawn a node and wait until its control socket answers and the scan settles. */
+	static async start(name: string, opts: NodeOpts = {}): Promise<Daemon> {
 		const d = new Daemon(name);
 		fs.mkdirSync(path.join(d.dir, "data"), { recursive: true });
-		d.httpPort = opts.httpPort || null;
+		d.httpPort = opts.httpPort ?? null;
 
 		let config =
 			`socket = "${d.socket}"\n` +
@@ -70,22 +92,22 @@ class Daemon {
 		});
 		await waitUntil(`daemon ${name} ready`, () => {
 			const s = d.tryStatus();
-			return s && s.indexing == null;
+			return s != null && s.indexing == null;
 		});
 		return d;
 	}
 
-	shareDir() {
+	shareDir(): string {
 		return path.join(this.dir, "share");
 	}
 
-	baseUrl() {
+	baseUrl(): string {
 		if (!this.httpPort) throw new Error(`daemon ${this.name} has no http gateway`);
 		return `http://127.0.0.1:${this.httpPort}`;
 	}
 
-	/// Run filestrctl; returns trimmed stdout (throws on non-zero unless allowFail).
-	ctl(args, allowFail = false) {
+	/** Run filestrctl; returns trimmed stdout (throws on non-zero unless allowFail). */
+	ctl(args: string[], allowFail = false): string {
 		const r = spawnSync(FILESTRCTL, ["--socket", this.socket, ...args], {
 			encoding: "utf8",
 			maxBuffer: 1 << 28,
@@ -96,11 +118,11 @@ class Daemon {
 		return (r.stdout || "").trim();
 	}
 
-	ctlJson(args) {
-		return JSON.parse(this.ctl(["--json", ...args]));
+	ctlJson<T = any>(args: string[]): T {
+		return JSON.parse(this.ctl(["--json", ...args])) as T;
 	}
 
-	tryStatus() {
+	private tryStatus(): { indexing?: unknown } | null {
 		try {
 			return this.ctlJson(["status"]);
 		} catch {
@@ -108,96 +130,99 @@ class Daemon {
 		}
 	}
 
-	nodeId() {
-		return this.ctlJson(["status"]).endpoint_id;
+	nodeId(): string {
+		return this.ctlJson<{ endpoint_id: string }>(["status"]).endpoint_id;
 	}
 
-	rescan() {
+	rescan(): void {
 		this.ctl(["rescan"]);
 	}
 
-	inviteCreate(label) {
+	inviteCreate(label?: string): string {
 		const args = ["invite", "create"];
 		if (label) args.push("--label", label);
 		// the ticket is the last non-empty line of stdout
-		return this.ctl(args).split("\n").filter(Boolean).pop();
+		return this.ctl(args).split("\n").filter(Boolean).pop() as string;
 	}
 
-	peerAdd(ticket) {
+	peerAdd(ticket: string): void {
 		this.ctl(["peer", "add", ticket]);
 	}
 
-	writeShare(rel, buf) {
+	writeShare(rel: string, buf: Buffer | string): string {
 		const p = path.join(this.shareDir(), rel);
 		fs.mkdirSync(path.dirname(p), { recursive: true });
 		fs.writeFileSync(p, buf);
 		return p;
 	}
 
-	/// Generate a tagged audio fixture with ffmpeg (1s sine), if available.
-	ffmpegTrack(rel, { artist, album, title } = {}) {
+	/** Generate a tagged audio fixture with ffmpeg (1s sine). */
+	ffmpegTrack(rel: string, tags: { artist?: string; album?: string; title?: string } = {}): void {
 		const out = path.join(this.shareDir(), rel);
 		fs.mkdirSync(path.dirname(out), { recursive: true });
 		const args = ["-v", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=1"];
-		if (artist) args.push("-metadata", `artist=${artist}`);
-		if (album) args.push("-metadata", `album=${album}`);
-		if (title) args.push("-metadata", `title=${title}`);
+		if (tags.artist) args.push("-metadata", `artist=${tags.artist}`);
+		if (tags.album) args.push("-metadata", `album=${tags.album}`);
+		if (tags.title) args.push("-metadata", `title=${tags.title}`);
 		args.push("-write_xing", "1", out);
 		ffmpeg(args);
 	}
 
-	async waitGateway() {
+	async waitGateway(): Promise<void> {
 		await waitUntil("http gateway", async () => {
 			try {
-				const r = await fetch(`${this.baseUrl()}/files`);
-				return r.ok;
+				return (await fetch(`${this.baseUrl()}/files`)).ok;
 			} catch {
 				return false;
 			}
 		});
 	}
 
-	async files() {
-		return (await fetch(`${this.baseUrl()}/files`)).json();
+	async files(): Promise<FilesResponse> {
+		return (await fetch(`${this.baseUrl()}/files`)).json() as Promise<FilesResponse>;
 	}
 
-	/// Poll until `/files` reports >= n peer-sourced (non-local) files.
-	async waitPeerFiles(n) {
+	/** Poll until `/files` reports >= n peer-sourced (non-local) files. */
+	async waitPeerFiles(n: number): Promise<void> {
 		await waitUntil(`${n} peer files`, async () => {
 			const f = await this.files();
-			return (f.files || []).filter((x) => x.source !== "local").length >= n;
+			return f.files.filter((x) => x.source !== "local").length >= n;
 		});
 	}
 
-	/// Poll until `/files` reports `n` files tagged with the given artist.
-	async waitTaggedFiles(artist, n) {
+	/** Poll until `/files` reports `n` files tagged with the given artist. */
+	async waitTaggedFiles(artist: string, n: number): Promise<void> {
 		await waitUntil(`${n} ${artist} tracks`, async () => {
 			const f = await this.files();
-			return (f.files || []).filter((x) => x.media && x.media.artist === artist).length === n;
+			return f.files.filter((x) => x.media?.artist === artist).length === n;
 		});
 	}
 
-	kill() {
-		try {
-			process.kill(this.proc.pid, "SIGKILL");
-		} catch {}
+	kill(): void {
+		if (this.proc?.pid) {
+			try {
+				process.kill(this.proc.pid, "SIGKILL");
+			} catch {
+				/* already gone */
+			}
+		}
 	}
 
-	stop() {
+	stop(): void {
 		this.kill();
 		try {
 			fs.rmSync(this.dir, { recursive: true, force: true });
-		} catch {}
+		} catch {
+			/* best effort */
+		}
 	}
 }
 
-function ffmpeg(args) {
+export function ffmpeg(args: string[]): void {
 	const r = spawnSync("ffmpeg", args, { stdio: "ignore" });
 	if (r.status !== 0) throw new Error(`ffmpeg failed: ${args.join(" ")}`);
 }
 
-function haveFfmpeg() {
+export function haveFfmpeg(): boolean {
 	return spawnSync("ffmpeg", ["-version"], { stdio: "ignore" }).status === 0;
 }
-
-module.exports = { Daemon, available, haveFfmpeg, ffmpeg, waitUntil, sleep, SCAFFOLD, ROOT };

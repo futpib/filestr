@@ -39,7 +39,8 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          # 24+ runs .ts test files directly (native type stripping).
+          node-version: "24"
       - name: Install ffmpeg
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
       # The plugin-runtime tests need Grayjay's injected scaffolding (polyfil.js +

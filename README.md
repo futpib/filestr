@@ -138,12 +138,13 @@ nostr relay).
 
 The **Grayjay plugin-runtime** tests load the plugin into Grayjay's own
 scaffolding (`polyfil.js` + `source.js`) and exercise `source.*`. They're
-[`node --test`](https://nodejs.org/api/test.html) suites in
+TypeScript [`node --test`](https://nodejs.org/api/test.html) suites in
 [`grayjay-plugin/test/`](grayjay-plugin/test) (harness in `test/harness/`),
+run directly by Node (native `.ts` type-stripping) and type-checked with `tsc`,
 driving the same real daemon over its gateway:
 
 ```sh
-cd grayjay-plugin && npm test   # builds the daemon, then runs test/*.test.js
+cd grayjay-plugin && npm test   # builds the daemon, typechecks, runs test/*.test.ts
 ```
 
 They skip cleanly unless Grayjay's scaffolding is present (a sibling `grayjay`
