@@ -572,7 +572,8 @@ async fn search_files(state: &Arc<State>, query: &str, is_head: bool) -> Result<
                 Ok(None) => break, // search completed
                 Err(_) => break,   // overall deadline
             };
-            let search::Hit { name, size, hash, source } = hit;
+            let search::Hit { file, source } = hit;
+            let libfilestr::ctl::FileEntry { path: name, size, hash, media } = file;
             let src = match source {
                 search::HitSource::Local => "local".to_string(),
                 search::HitSource::Upstream { peer, handle } => {
@@ -583,24 +584,22 @@ async fn search_files(state: &Arc<State>, query: &str, is_head: bool) -> Result<
                     labels.get(&peer).cloned().unwrap_or_else(|| short(&peer))
                 }
             };
+            // The hit carries its media (local or multi-hop) — no separate
+            // local-only enrichment pass that silently drops peer metadata.
             by_hash.entry(hash.clone()).or_insert_with(|| FileItem {
                 name,
                 hash,
                 size,
                 source: src,
-                media: Default::default(),
+                media,
                 thumb: false,
             });
         }
         task.abort();
 
-        // enrich local results with media + thumbnail (peer hits carry neither
-        // over the search wire yet)
-        let index = state.index.read().await;
+        // thumbnails live in our local store, so they can only be set for hashes
+        // we hold; media already came in on the hit.
         for item in by_hash.values_mut() {
-            if let Some(f) = index.files.iter().find(|f| f.hash == item.hash) {
-                item.media = f.media.clone();
-            }
             item.thumb = has_thumb(state, &item.hash);
         }
     }

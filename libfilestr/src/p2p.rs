@@ -96,12 +96,16 @@ pub enum P2pResponse {
     /// One chunk of a file list; the stream ends with `list_done`.
     Entries { entries: Vec<FileEntry> },
     ListDone { total: u64 },
-    /// One search result: `{name, size, hash, handle}` and nothing else —
-    /// no origin node id, no path through the graph (§7.1).
+    /// One search result: a [`FileEntry`] (the *same* canonical file record
+    /// that `Entries` carries on browse — path, size, hash, and media tags)
+    /// plus an opaque per-requester `handle`, and nothing else. No origin node
+    /// id, no path through the graph (§7.1). Embedding `FileEntry` rather than a
+    /// bare `{name,size,hash}` is deliberate: search and browse share one file
+    /// representation, so a hit can never be minted without its media metadata
+    /// (a peer's duration/tags reach a federated searcher, no more `media:
+    /// null` on multi-hop results).
     Hit {
-        name: String,
-        size: u64,
-        hash: String,
+        file: FileEntry,
         handle: String,
     },
     SearchDone,
@@ -183,14 +187,41 @@ mod tests {
 
     #[test]
     fn hit_has_no_attribution_fields() {
+        // The hit is just a FileEntry + an opaque handle: no node id, no origin.
         let hit = P2pResponse::Hit {
-            name: "song.flac".into(),
-            size: 1,
-            hash: "aa".into(),
+            file: FileEntry {
+                path: "song.flac".into(),
+                size: 1,
+                hash: "aa".into(),
+                media: crate::ctl::MediaMeta::default(),
+            },
             handle: "hh".into(),
         };
         let value = serde_json::to_value(&hit).unwrap();
         let keys: Vec<&str> = value.as_object().unwrap().keys().map(|k| k.as_str()).collect();
-        assert_eq!(keys, ["handle", "hash", "name", "size", "type"]);
+        assert_eq!(keys, ["file", "handle", "type"]);
+    }
+
+    #[test]
+    fn hit_carries_media_metadata() {
+        // Regression guard for the federated-search "media: null" bug: a hit
+        // built from a tagged FileEntry serializes its duration/tags, so a
+        // multi-hop searcher receives them.
+        let hit = P2pResponse::Hit {
+            file: FileEntry {
+                path: "track.mp3".into(),
+                size: 10,
+                hash: "bb".into(),
+                media: crate::ctl::MediaMeta {
+                    duration_secs: Some(123.0),
+                    artist: Some("Curtis".into()),
+                    ..Default::default()
+                },
+            },
+            handle: "hh".into(),
+        };
+        let value = serde_json::to_value(&hit).unwrap();
+        assert_eq!(value["file"]["media"]["duration_secs"], 123.0);
+        assert_eq!(value["file"]["media"]["artist"], "Curtis");
     }
 }

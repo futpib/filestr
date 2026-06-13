@@ -13,6 +13,7 @@ use iroh_blobs::api::remote::GetProgressItem;
 use iroh_blobs::get::StreamPair;
 use iroh_blobs::protocol::{ChunkRanges, ChunkRangesExt, GetRequest};
 use libfilestr::config::VIEW_FULL;
+use libfilestr::ctl::FileEntry;
 use libfilestr::grants::PeerIn;
 use libfilestr::p2p::{self, P2pRequest, P2pResponse};
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -40,12 +41,13 @@ pub fn parse_range(s: &str) -> Result<ByteRange> {
     Ok((start, end))
 }
 
-/// An internal search hit, before per-requester handle minting.
+/// An internal search hit, before per-requester handle minting. Wraps the
+/// canonical [`FileEntry`] (path/size/hash/media) — the *same* record browse
+/// returns — so a hit always carries its media metadata. There is no
+/// media-less "bare hit" path: local and peer hits both go through `file`.
 #[derive(Debug, Clone)]
 pub struct Hit {
-    pub name: String,
-    pub size: u64,
-    pub hash: String,
+    pub file: FileEntry,
     pub source: HitSource,
 }
 
@@ -167,9 +169,12 @@ pub async fn run_search(
         let index = state.index.read().await;
         for file in index.search(&roots, &query) {
             let hit = Hit {
-                name: file.path.clone(),
-                size: file.size,
-                hash: file.hash.clone(),
+                file: FileEntry {
+                    path: file.path.clone(),
+                    size: file.size,
+                    hash: file.hash.clone(),
+                    media: file.media.clone(),
+                },
                 source: HitSource::Local,
             };
             if tx.send(hit).await.is_err() {
@@ -241,11 +246,9 @@ async fn forward_to_peer(
     .await?;
     while let Some(resp) = read_response(&mut reader).await? {
         match resp {
-            P2pResponse::Hit { name, size, hash, handle } => {
+            P2pResponse::Hit { file, handle } => {
                 let hit = Hit {
-                    name,
-                    size,
-                    hash,
+                    file,
                     source: HitSource::Upstream { peer: peer.node_id.clone(), handle },
                 };
                 if tx.send(hit).await.is_err() {

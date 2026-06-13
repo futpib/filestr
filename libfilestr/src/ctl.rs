@@ -318,6 +318,11 @@ pub struct SearchHit {
     pub size: u64,
     pub hash: String,
     pub handle: String,
+    /// Media tags (duration/title/artist/album/content-type), carried for
+    /// every hit — local or multi-hop — because the p2p hit now embeds the
+    /// full [`FileEntry`]. Empty for non-media files.
+    #[serde(default, skip_serializing_if = "MediaMeta::is_empty")]
+    pub media: MediaMeta,
     /// Which of our peers delivered the hit (local knowledge only; never on
     /// the p2p wire).
     #[serde(default)]

@@ -267,14 +267,8 @@ function recommendationsFor(hash) {
 }
 source.getContentDetails = function (url) {
     const { hash, name } = parseFileUrl(url);
-    // Find the matching file for accurate name/size; fall back to the URL.
-    let item = null;
-    try {
-        item = fetchFiles().find((f) => f.hash === hash) || null;
-    }
-    catch (e) {
-        // gateway may be momentarily unavailable; build from the URL instead
-    }
+    // Find the matching file for accurate name/size + media; fall back to the URL.
+    const item = findFile(hash, name);
     const display = item ? displayName(item) : name || hash;
     const sourceLabel = item ? item.source : "filestr";
     const dur = item ? durationOf(item) : 0;
@@ -368,6 +362,33 @@ function fetchRelated(hash) {
 // Everything this node can serve (its shares + a one-hop browse of peers).
 function fetchFiles() {
     return fetchIndex("/files").files || [];
+}
+// Resolve a single file (with its media tags) by hash for getContentDetails.
+// /files only lists local + directly-browsed peers, so a multi-hop file reached
+// via federated search isn't there — fall back to the search index, which now
+// carries full media for every hit (local or multi-hop). Without this fallback
+// such a file gets duration 0 (the "-12:-55" seekbar bug) even though the search
+// result that opened it had the right duration.
+function findFile(hash, name) {
+    try {
+        const local = fetchFiles().find((f) => f.hash === hash);
+        if (local)
+            return local;
+    }
+    catch (e) {
+        // gateway may be momentarily unavailable; try search, then the URL
+    }
+    if (name) {
+        try {
+            const hit = fetchSearch(name).find((f) => f.hash === hash);
+            if (hit)
+                return hit;
+        }
+        catch (e) {
+            // fall through to building from the URL
+        }
+    }
+    return null;
 }
 // The granted peers and whether each answered the latest browse, so we can tell
 // an offline peer apart from one that simply has nothing to share.

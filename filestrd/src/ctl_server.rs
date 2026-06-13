@@ -877,14 +877,25 @@ async fn handle_search(
             HitSource::Local => (String::new(), None),
             HitSource::Upstream { peer, handle } => {
                 state.recent_sources.lock().await.insert(
-                    &hit.hash,
-                    SourceRef { peer: peer.clone(), handle: Some(handle.clone()), size: hit.size },
+                    hit.file.hash.as_str(),
+                    SourceRef {
+                        peer: peer.clone(),
+                        handle: Some(handle.clone()),
+                        size: hit.file.size,
+                    },
                 );
                 (handle, Some(peer))
             }
         };
         let body = ResponseBody::SearchHit {
-            hit: SearchHit { name: hit.name, size: hit.size, hash: hit.hash, handle, via },
+            hit: SearchHit {
+                name: hit.file.path,
+                size: hit.file.size,
+                hash: hit.file.hash,
+                handle,
+                media: hit.file.media,
+                via,
+            },
         };
         write_response(write, id, body).await?;
         count += 1;

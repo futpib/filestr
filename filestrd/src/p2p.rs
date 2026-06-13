@@ -369,11 +369,9 @@ async fn handle_search(
             }
         };
         let handle = state.handles.lock().await.mint(target);
-        write_response(
-            send,
-            &P2pResponse::Hit { name: hit.name, size: hit.size, hash: hit.hash, handle },
-        )
-        .await?;
+        // The full FileEntry (incl. media) rides along: a downstream searcher
+        // gets the same metadata browse would give, even multiple hops out.
+        write_response(send, &P2pResponse::Hit { file: hit.file, handle }).await?;
         count += 1;
     }
     drop(rx);
