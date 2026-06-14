@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[lints]
+workspace = true
+
 [features]
 default = ["chat"]
 # Optional nostr chat plane (Marmot/MLS hubs). Disable for an iroh-only build.

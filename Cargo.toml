@@ -6,3 +6,10 @@ members = ["libfilestr", "libfilestrctl", "filestrd", "filestrctl", "filestr-cha
 version = "0.1.0"
 edition = "2024"
 license = "MIT"
+
+# Warnings fail the build in our own crates (deps are unaffected — the lints
+# table only applies to the crate it's declared in). Catches dead code, unused
+# imports, etc. at compile time instead of letting them accrete. Each member
+# opts in with `[lints] workspace = true`.
+[workspace.lints.rust]
+warnings = "deny"

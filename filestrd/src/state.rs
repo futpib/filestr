@@ -357,7 +357,9 @@ pub struct BrowseSources {
 
 impl BrowseSources {
     /// Replace everything known from `peer` with this browse's results (or drop
-    /// the peer entirely when it served nothing this time).
+    /// the peer entirely when it served nothing this time). Only the HTTP
+    /// gateway populates this map, so it's gated with it.
+    #[cfg(feature = "grayjay")]
     pub fn replace_peer(&mut self, peer: &str, entries: HashMap<String, u64>) {
         if entries.is_empty() {
             self.by_peer.remove(peer);
@@ -366,7 +368,9 @@ impl BrowseSources {
         }
     }
 
-    /// A known size for `hash` from any peer that advertises it.
+    /// A known size for `hash` from any peer that advertises it. Consulted only
+    /// by the gateway, so it's gated with it.
+    #[cfg(feature = "grayjay")]
     pub fn size_of(&self, hash: &str) -> Option<u64> {
         self.by_peer.values().find_map(|m| m.get(hash).copied()).filter(|&s| s > 0)
     }

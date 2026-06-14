@@ -204,7 +204,6 @@ mod tests {
 
     #[test]
     fn newcomer_budget_bootstraps() {
-        let store = RepStore::default();
         let p = policy(0, 500);
         // brand-new peer (no stats) is served thanks to the budget
         assert_eq!(decide(None, &p), ServiceAction::Serve);
