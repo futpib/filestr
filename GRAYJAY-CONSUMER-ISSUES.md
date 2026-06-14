@@ -34,7 +34,7 @@ so every lookup misses and asserts the duration survives from the URL.
 **Not covered by this fix:** files whose *source* genuinely reports no duration —
 see issue 6.
 
-## 2. Duplicate recommendations — OPEN
+## 2. Duplicate recommendations — FIXED
 
 **Symptom.** "Infected Mushroom — She Zoremet" appears twice, identical (both
 5:15, both `874a`).
@@ -46,11 +46,14 @@ files → different hashes, near-identical duration). `list_related`
 only**, so same-song-different-bytes copies both pass. Reproduced deterministically
 with two synthetic same-title files → `/related` returned both.
 
-**Proposed fix.** Dedup recommendations by a content key like
-`(artist, title, round(duration))` (or `(displayName, size)`), not just hash.
-Low effort. Keep hash-dedup as the first pass; collapse near-identical siblings.
+**Fix.** `list_related` now dedups by a content key —
+`(artist, title, round(duration))`, falling back to `(filename, size)` when
+untagged — instead of by hash, and seeds that set with the opened track so a
+copy of *it* is never recommended either. Regression test
+`related_collapses_duplicate_rips` in `e2e_playlists.rs` (two same-tag,
+different-byte rips → one recommendation).
 
-## 3. Non-media files surfaced as playable "tracks" — OPEN
+## 3. Non-media files surfaced as playable "tracks" — FIXED
 
 **Symptom (found while reproducing).** Junk entries in the feed: an image
 `00-ugress-unicorn-2008-back_scan-prs.jpg` showed up as a video; logs/playlists
@@ -62,11 +65,15 @@ Low effort. Keep hash-dedup as the first pass; collapse near-identical siblings.
 - Content sniffing mis-tags some text/log files as `audio/mpeg` (a byte run that
   matches the MP3 frame-sync heuristic).
 
-**Proposed fix.**
-- `isPlayable` should *require* an `audio/` or `video/` content-type prefix
-  (allowlist), not just "not octet-stream". Low effort, removes images outright.
-- Tighten the MP3 sniff (require a valid frame header, or don't sniff non-media
-  extensions as audio). Medium.
+**Fix.** Both layers:
+- `isPlayable` now *requires* an `audio/` or `video/` content-type prefix
+  (allowlist) — images/PDFs/etc. are dropped.
+- The sniffer (`metadata.rs`) now (a) skips known non-media extensions
+  (`.log/.txt/.nfo/.cue/.m3u/…`) outright, and (b) validates a real MPEG frame
+  header (`is_mpeg_frame`: version/layer/bitrate/sample-rate), so a UTF-16 BOM
+  (`0xFF 0xFE`) — the actual cause, EAC/CUETools logs are UTF-16 — is no longer
+  mistaken for MP3. Unit tests `mpeg_frame_rejects_utf16_bom` and
+  `sidecar_extensions_are_not_media`.
 
 ## 4. No cover art on peer tiles — OPEN (known gap)
 

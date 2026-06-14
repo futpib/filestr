@@ -16,6 +16,20 @@ fn mk(node: &Node, file: &str, artist: &str, album: &str, title: &str) {
     ]);
 }
 
+// Like `mk` but with an explicit tone frequency, so two tracks can share tags
+// while differing in bytes (and thus hash) — a "duplicate rip".
+fn mkf(node: &Node, file: &str, freq: u32, artist: &str, album: &str, title: &str) {
+    let out = node.share_dir().join(file);
+    ffmpeg(&[
+        "-f", "lavfi", "-i", &format!("sine=frequency={freq}:duration=1"),
+        "-metadata", &format!("artist={artist}"),
+        "-metadata", &format!("album={album}"),
+        "-metadata", &format!("title={title}"),
+        "-write_xing", "1",
+        out.to_str().unwrap(),
+    ]);
+}
+
 fn img(node: &Node, rel: &str, color: &str) {
     let out = node.share_dir().join(rel);
     std::fs::create_dir_all(out.parent().unwrap()).unwrap();
@@ -125,4 +139,44 @@ async fn playlists_groupings_resolution_and_related() {
         http.json(&format!("/related?hash={}", "0".repeat(64))).await["files"].as_array().unwrap().len(),
         0
     );
+}
+
+/// Recommendations collapse duplicate rips: two files with the same
+/// artist/title/length but different bytes (so different hashes) must appear
+/// once in /related, not twice (the duplicate-"She Zoremet" bug).
+#[tokio::test]
+async fn related_collapses_duplicate_rips() {
+    if !have_ffmpeg() {
+        eprintln!("SKIP (ffmpeg not installed)");
+        return;
+    }
+    let a = Node::start("A", NodeOpts { share: true, http_port: Some(39156), ..Default::default() })
+        .await;
+    mk(&a, "anchor.mp3", "Dup Artist", "Dup Album", "Anchor");
+    mkf(&a, "twin_a.mp3", 550, "Dup Artist", "Dup Album", "Twin");
+    mkf(&a, "twin_b.mp3", 660, "Dup Artist", "Dup Album", "Twin");
+    a.rescan().await;
+
+    let http = a.http();
+    http.wait_ready().await;
+    common::wait_until("tracks indexed", || async {
+        http.files().await["files"].as_array().map(|a| a.len()) == Some(3)
+    })
+    .await;
+
+    let files = http.files().await;
+    let anchor = files["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["name"].as_str().unwrap().ends_with("anchor.mp3"))
+        .unwrap()["hash"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let rel = http.json(&format!("/related?hash={anchor}")).await;
+    let sib = rel["files"].as_array().unwrap();
+    let twins = sib.iter().filter(|f| f["media"]["title"] == "Twin").count();
+    assert_eq!(twins, 1, "duplicate rips not collapsed in recommendations: {sib:?}");
 }

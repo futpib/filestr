@@ -433,8 +433,29 @@ async fn list_related(state: &Arc<State>, hash: &str, is_head: bool) -> Result<R
         |f: &FileItem| folder.as_deref().is_some_and(|d| is_audio_or_video(f) && folder_of(&f.name) == d);
     let same_artist = |f: &FileItem| artist.as_deref().is_some_and(|a| f.media.artist.as_deref() == Some(a));
 
-    // album/folder mates first (tightest), then artist mates; dedup by hash, cap
+    // A content key that collapses near-identical copies (a re-rip with a
+    // different hash but the same artist/title/length, or the same filename+size):
+    // dedup on it so the Recommended tab doesn't list the same song twice (the
+    // duplicate-"She Zoremet" bug). Falls back to filename+size when untagged.
+    let content_key = |f: &FileItem| -> String {
+        match f.media.title.as_deref().filter(|t| !t.is_empty()) {
+            Some(title) => format!(
+                "t:{}|{}|{}",
+                f.media.artist.as_deref().unwrap_or("").to_lowercase(),
+                title.to_lowercase(),
+                f.media.duration_secs.map(|d| d.round() as i64).unwrap_or(-1),
+            ),
+            None => {
+                let base = f.name.rsplit('/').next().unwrap_or(&f.name);
+                format!("n:{}|{}", base.to_lowercase(), f.size)
+            }
+        }
+    };
+
+    // album/folder mates first (tightest), then artist mates; dedup by content
+    // key (so a re-rip of the playing track, or of a sibling, shows once), cap
     let mut seen = std::collections::BTreeSet::new();
+    seen.insert(content_key(target)); // never recommend a copy of the track itself
     let mut out: Vec<&FileItem> = Vec::new();
     for pick in [
         &same_album as &dyn Fn(&FileItem) -> bool,
@@ -445,7 +466,7 @@ async fn list_related(state: &Arc<State>, hash: &str, is_head: bool) -> Result<R
             if out.len() >= CAP {
                 break;
             }
-            if pick(f) && seen.insert(f.hash.clone()) {
+            if pick(f) && seen.insert(content_key(f)) {
                 out.push(f);
             }
         }

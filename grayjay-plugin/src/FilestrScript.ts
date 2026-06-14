@@ -693,8 +693,12 @@ function baseName(path: string): string {
 	return parts[parts.length - 1] || path;
 }
 
+// Only audio/video are playable. An allowlist (not "anything but octet-stream")
+// keeps images, PDFs, and other non-media out of the feed — they otherwise
+// surfaced as bogus "tracks".
 function isPlayable(f: FileEntry): boolean {
-	return contentType(f) !== "application/octet-stream";
+	const cls = mimeClassOf(f);
+	return cls === "audio" || cls === "video";
 }
 
 // "audio" or "video" (or "" for non-media) from the file's content type.

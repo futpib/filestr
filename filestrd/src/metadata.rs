@@ -49,10 +49,25 @@ pub fn probe(path: &Path) -> Probed {
 /// a MIME type for the formats we care about, else None.
 fn sniff_content_type(path: &Path) -> Option<String> {
     use std::io::Read;
+    // Files whose extension makes clear they aren't media are never sniffed: a
+    // UTF-16 sidecar (EAC/CUETools logs, some .m3u) starts with the BOM 0xFF 0xFE,
+    // which trips the raw MPEG frame-sync bits and used to be mis-tagged
+    // audio/mpeg (surfacing logs/playlists as "tracks"). A genuinely misnamed
+    // media file with one of these extensions is vanishingly rare; getting the
+    // common log/playlist/text case right wins.
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        if matches!(
+            ext.to_ascii_lowercase().as_str(),
+            "log" | "txt" | "nfo" | "cue" | "m3u" | "m3u8" | "pls" | "md" | "json"
+                | "xml" | "ini" | "sfv" | "accurip" | "ffp"
+        ) {
+            return None;
+        }
+    }
     let mut head = [0u8; 64];
     let n = std::fs::File::open(path).ok()?.read(&mut head).ok()?;
     let b = &head[..n];
-    let ct = if b.starts_with(b"ID3") || (b.len() >= 2 && b[0] == 0xFF && (b[1] & 0xE0) == 0xE0) {
+    let ct = if b.starts_with(b"ID3") || is_mpeg_frame(b) {
         "audio/mpeg"
     } else if b.starts_with(b"fLaC") {
         "audio/flac"
@@ -89,6 +104,20 @@ fn sniff_content_type(path: &Path) -> Option<String> {
         return None;
     };
     Some(ct.to_string())
+}
+
+/// Whether the head looks like a real MPEG audio frame, not just the 11 sync
+/// bits. Validating the version/layer/bitrate/sample-rate fields rejects
+/// non-MP3 byte runs (e.g. a UTF-16 BOM 0xFF 0xFE) that share the sync bits.
+fn is_mpeg_frame(b: &[u8]) -> bool {
+    if b.len() < 3 || b[0] != 0xFF || (b[1] & 0xE0) != 0xE0 {
+        return false;
+    }
+    let version = (b[1] >> 3) & 0x3; // 01 = reserved
+    let layer = (b[1] >> 1) & 0x3; // 00 = reserved
+    let bitrate = (b[2] >> 4) & 0xF; // 0000 = free, 1111 = bad
+    let samplerate = (b[2] >> 2) & 0x3; // 11 = reserved
+    version != 0x1 && layer != 0x0 && bitrate != 0xF && samplerate != 0x3
 }
 
 fn probe_symphonia(path: &Path) -> Option<Probed> {
@@ -181,4 +210,34 @@ fn probe_mp4(path: &Path) -> Option<MediaMeta> {
         meta.duration_secs = Some(secs);
     }
     Some(meta)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mpeg_frame_rejects_utf16_bom() {
+        // UTF-16 LE BOM shares the 11 sync bits but isn't a valid frame header.
+        assert!(!is_mpeg_frame(&[0xFF, 0xFE, 0xFF, 0xFF]));
+        // a real MPEG1 Layer III frame (128 kbps, 44.1 kHz) is accepted
+        assert!(is_mpeg_frame(&[0xFF, 0xFB, 0x90, 0x00]));
+        // reserved sample-rate / bad bitrate are rejected
+        assert!(!is_mpeg_frame(&[0xFF, 0xFB, 0xFC, 0x00]));
+    }
+
+    #[test]
+    fn sidecar_extensions_are_not_media() {
+        // A UTF-16 log (EAC/auCDtect): magic bytes look MP3-ish, extension says no.
+        let dir = std::env::temp_dir().join(format!("filestr-sniff-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("rushchk.log");
+        std::fs::write(&log, [0xFFu8, 0xFE, b'h', 0, b'i', 0]).unwrap();
+        assert_eq!(sniff_content_type(&log), None, "a .log must not sniff as media");
+        // a real PNG (non-media extension not in the deny list) is still detected
+        let png = dir.join("cover.png");
+        std::fs::write(&png, [0x89u8, b'P', b'N', b'G', b'\r', b'\n']).unwrap();
+        assert_eq!(sniff_content_type(&png).as_deref(), Some("image/png"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }
