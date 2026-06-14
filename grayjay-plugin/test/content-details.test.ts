@@ -5,7 +5,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import * as path from "node:path";
-import { Daemon, available, haveFfmpeg, ffmpeg } from "./harness/daemon.ts";
+import * as fs from "node:fs";
+import { Daemon, available, haveFfmpeg, ffmpeg, waitUntil } from "./harness/daemon.ts";
 import { loadSource, type PlatformItem } from "./harness/plugin.ts";
 
 const skip = !available()
@@ -66,6 +67,40 @@ test("audio is unmuxed with a real duration; video is muxed", { skip }, async ()
 		assert.equal(video.descType, "MuxVideoSourceDescriptor", "video not a mux descriptor");
 		assert.equal(video.video!.type, "VideoUrlSource", "not a VideoUrlSource");
 		assert.ok(video.video!.duration > 2 && video.video!.duration < 4, `video duration ${video.video!.duration} (~3)`);
+	} finally {
+		a.stop();
+	}
+});
+
+// The crux of the "-12:-55" fix: getContentDetails must recover the duration
+// from the URL it's handed, NOT by re-downloading the whole library to find the
+// row. We prove it by deleting the file so every lookup (/files, /search) misses
+// — the duration must survive purely from the metadata embedded in the URL.
+test("content detail keeps duration from the URL with no library lookup", { skip }, async () => {
+	const a = await Daemon.start("A", { share: true, httpPort: 39215 });
+	try {
+		const sd = a.shareDir();
+		ffmpeg(["-v", "error", "-y", "-f", "lavfi", "-i", "sine=frequency=440:duration=2", "-write_xing", "1", path.join(sd, "lonely.mp3")]);
+		a.rescan();
+		await a.waitGateway();
+
+		const source = loadSource(a.baseUrl());
+		const url = String(source.getHome().results.find((v) => String(v.url).indexOf("lonely.mp3") !== -1)!.url);
+		assert.match(url, /[?&]m=/, "content URL is missing the embedded metadata blob");
+
+		// remove the file so a library lookup can no longer resolve it
+		fs.unlinkSync(path.join(sd, "lonely.mp3"));
+		a.rescan();
+		await waitUntil("file gone from the gateway", async () =>
+			!(await a.files()).files.some((f) => String(f.name).endsWith("lonely.mp3")),
+		);
+
+		// duration is still correct — recovered from the URL alone, no fetch
+		const d = source.getContentDetails(url);
+		const dur = d.duration as number;
+		assert.ok(dur > 1 && dur < 4, `duration lost without a library lookup: ${dur} (the -12:-55 path)`);
+		const audioDur = (d.video?.audioSources?.[0]?.duration) as number;
+		assert.equal(audioDur, dur, "audio source/details duration mismatch from the embedded URL");
 	} finally {
 		a.stop();
 	}

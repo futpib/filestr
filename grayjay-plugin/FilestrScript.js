@@ -266,14 +266,18 @@ function recommendationsFor(hash) {
     return new FilestrContentPager(files.filter(isPlayable).map(fileToVideo));
 }
 source.getContentDetails = function (url) {
-    const { hash, name } = parseFileUrl(url);
-    // Find the matching file for accurate name/size + media; fall back to the URL.
-    const item = findFile(hash, name);
+    const { hash, name, embedded } = parseFileUrl(url);
+    // Prefer the metadata embedded in the URL (the exact FileEntry the card was
+    // built from — no network, always present when opened from our own feed). Only
+    // fall back to a library lookup for a bare URL (e.g. one persisted before this
+    // existed). This is what makes the duration correct every time, cache-free.
+    const item = embedded ?? findFile(hash, name);
     const display = item ? displayName(item) : name || hash;
     const sourceLabel = item ? item.source : "filestr";
     const dur = item ? durationOf(item) : 0;
     const fileName = item ? item.name : display;
     const container = item ? contentType(item) : containerOf(fileName);
+    const pageUrl = item ? contentPageUrl(item) : contentUrl(hash, fileName);
     return new PlatformVideoDetails({
         id: new PlatformID(PLATFORM, hash, PLUGIN_ID),
         name: display,
@@ -282,11 +286,12 @@ source.getContentDetails = function (url) {
         datetime: item ? dateOf(item) : nowSeconds(),
         duration: dur,
         viewCount: -1,
-        url: contentUrl(hash, fileName),
-        shareUrl: contentUrl(hash, fileName),
+        url: pageUrl,
+        shareUrl: pageUrl,
         isLive: false,
         description: item ? describe(item) : "",
         rating: new RatingLikes(0),
+        // the player streams from the plain URL (no metadata blob needed there)
         video: sourceDescriptor(contentUrl(hash, fileName), container, dur),
         // the Recommended tab: the playlists this file belongs to
         getContentRecommendations: () => recommendationsFor(hash),
@@ -433,8 +438,9 @@ function fileToVideo(f) {
         datetime: dateOf(f),
         duration: durationOf(f),
         viewCount: -1,
-        url: contentUrl(f.hash, f.name),
-        shareUrl: contentUrl(f.hash, f.name),
+        // the page URL carries the full FileEntry so opening it needs no lookup
+        url: contentPageUrl(f),
+        shareUrl: contentPageUrl(f),
         isLive: false,
     });
 }
@@ -532,8 +538,27 @@ function groupStub(kind, g, source) {
         videoCount: g.count,
     });
 }
+// The plain streaming URL the player GETs (the gateway routes on the hash in the
+// path and ignores query params). `name` is a download-filename hint.
 function contentUrl(hash, name) {
     return `${BASE_URL}/file/${hash}?name=${encodeURIComponent(name || "")}`;
+}
+// The content-page / share URL. It embeds the whole FileEntry (`&m=`) we already
+// hold when building the card, so getContentDetails can reconstruct duration,
+// tags, date, thumbnail — everything — with ZERO network calls. Without this,
+// getContentDetails re-downloads the entire library (a full browse of every
+// peer) just to find one row, which for a large/slow peer arrives late or
+// incomplete → duration 0 → Grayjay frame-guesses → the "-12:-55" seekbar. The
+// player still streams from the plain `contentUrl`; `m` is read on open only.
+function contentPageUrl(f) {
+    let blob = "";
+    try {
+        blob = encodeURIComponent(JSON.stringify(f));
+    }
+    catch (e) {
+        // fall back to a metadata-less URL; getContentDetails will look it up
+    }
+    return blob ? `${contentUrl(f.hash, f.name)}&m=${blob}` : contentUrl(f.hash, f.name);
 }
 function parseFileUrl(url) {
     const m = /\/file\/([0-9a-fA-F]+)/.exec(url);
@@ -543,7 +568,21 @@ function parseFileUrl(url) {
     if (q !== -1) {
         name = decodeURIComponent(url.substring(q + 5).split("&")[0]);
     }
-    return { hash, name };
+    // The metadata blob embedded by contentPageUrl, if present.
+    let embedded = null;
+    const mi = url.indexOf("m=");
+    if (mi !== -1) {
+        try {
+            const raw = decodeURIComponent(url.substring(mi + 2).split("&")[0]);
+            const parsed = JSON.parse(raw);
+            if (parsed && parsed.hash)
+                embedded = parsed;
+        }
+        catch (e) {
+            // malformed/absent blob → fall back to a lookup
+        }
+    }
+    return { hash, name, embedded };
 }
 function baseName(path) {
     if (!path)
