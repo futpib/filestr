@@ -279,7 +279,7 @@ source.getContentDetails = function (url) {
         name: display,
         thumbnails: item ? thumbsFor(item) : new Thumbnails([]),
         author: authorOf(sourceLabel),
-        datetime: nowSeconds(),
+        datetime: item ? dateOf(item) : nowSeconds(),
         duration: dur,
         viewCount: -1,
         url: contentUrl(hash, fileName),
@@ -430,7 +430,7 @@ function fileToVideo(f) {
         name: displayName(f),
         thumbnails: thumbsFor(f),
         author: authorOf(f.source),
-        datetime: nowSeconds(),
+        datetime: dateOf(f),
         duration: durationOf(f),
         viewCount: -1,
         url: contentUrl(f.hash, f.name),
@@ -604,6 +604,14 @@ function humanSize(n) {
         i++;
     }
     return `${i === 0 ? v : v.toFixed(1)} ${u[i]}`;
+}
+// A file's publish date for Grayjay: its real mtime when known, so the feed has
+// a stable order and sort-by-date works. Falls back to "now" only when the
+// gateway couldn't determine an mtime (mtime 0/absent) — without this the
+// datetime was always now, so every item read as "just now" and the feed
+// reshuffled on each fetch.
+function dateOf(f) {
+    return typeof f.mtime === "number" && f.mtime > 0 ? f.mtime : nowSeconds();
 }
 function nowSeconds() {
     try {

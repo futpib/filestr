@@ -308,6 +308,12 @@ pub struct FileEntry {
     pub path: String,
     pub size: u64,
     pub hash: String,
+    /// File mtime (seconds since the epoch); 0 when unavailable. Carried so a
+    /// consumer can show a real date and a stable sort-by-date instead of
+    /// "just now" on every fetch. `#[serde(default)]` keeps an older peer that
+    /// omits it readable (it simply reads as 0).
+    #[serde(default)]
+    pub mtime: u64,
     #[serde(default, skip_serializing_if = "MediaMeta::is_empty")]
     pub media: MediaMeta,
 }
@@ -318,6 +324,10 @@ pub struct SearchHit {
     pub size: u64,
     pub hash: String,
     pub handle: String,
+    /// File mtime (seconds since the epoch); 0 when unknown. Carried for every
+    /// hit since the hit embeds the full [`FileEntry`].
+    #[serde(default)]
+    pub mtime: u64,
     /// Media tags (duration/title/artist/album/content-type), carried for
     /// every hit — local or multi-hop — because the p2p hit now embeds the
     /// full [`FileEntry`]. Empty for non-media files.

@@ -57,6 +57,11 @@ async fn media_metadata_tags_duration_sniffing_and_thumbnails() {
     let adur = song["media"]["duration_secs"].as_f64().unwrap();
     assert!((1.8..2.3).contains(&adur), "mp3 duration {adur} (want ~2.0)");
 
+    // real per-file mtime is served (not "just now"): the file was created this
+    // run, so it's recent but a real epoch timestamp, not absent/0
+    let mtime = song["mtime"].as_u64().unwrap_or(0);
+    assert!(mtime > 1_600_000_000, "no real mtime served for song.mp3: {mtime}");
+
     // video duration from the mp4 container
     let vdur = sel(&files, "clip.mp4")["media"]["duration_secs"].as_f64().unwrap();
     assert!((2.7..3.3).contains(&vdur), "mp4 duration {vdur} (want ~3.0)");

@@ -173,6 +173,7 @@ pub async fn run_search(
                     path: file.path.clone(),
                     size: file.size,
                     hash: file.hash.clone(),
+                    mtime: file.mtime,
                     media: file.media.clone(),
                 },
                 source: HitSource::Local,

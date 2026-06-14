@@ -893,6 +893,7 @@ async fn handle_search(
                 size: hit.file.size,
                 hash: hit.file.hash,
                 handle,
+                mtime: hit.file.mtime,
                 media: hit.file.media,
                 via,
             },

@@ -26,9 +26,6 @@ ordered by consumer impact per unit of effort. Shipped work is removed, not kept
 ## Open gaps
 
 ### Feed metadata
-- **Dates are fake** — `datetime: nowSeconds()`, so everything reads as "just
-  now", sort-by-date is meaningless, and items reshuffle on each fetch. Needs
-  per-file mtime plumbed through the index → `/files`.
 - **Some durations missing** — mkv/webm aren't reliably populated by `symphonia`,
   and a CBR MP3 with no Xing/Info header reports none.
 
@@ -50,9 +47,10 @@ ordered by consumer impact per unit of effort. Shipped work is removed, not kept
   It's concurrent and per-peer bounded now (a dead peer no longer stalls the
   feed), but results aren't cached/incremental, so every call pays the
   round-trips.
-- **Peer search hits carry no media** — peer hits over the search wire lack
-  title/artist/album/thumbnail (only local hits are enriched), and there are no
-  sort options (`sorts: []`).
+- **No sort options** (`sorts: []`). (Peer/federated hits now *do* carry full
+  media — title/artist/album/duration/content-type/mtime — because the p2p hit
+  embeds the canonical `FileEntry`; only cover-art bytes are still local-only,
+  tracked under Thumbnails → "Peer cover art isn't fetched".)
 
 ## Native device-library integration (Grayjay "Files" tab)
 
@@ -87,9 +85,8 @@ filestr would appear under the Directories browse, not merged into those tabs.
 | Item | Effort | Notes |
 |---|---|---|
 | Cache the peer-browse + paginate | med | scale for real libraries |
-| Real dates (file mtime) | low–med | unblocks sort-by-date + stable ordering |
 | `Content-Disposition` | low | filename hint for a download action |
-| Media + cover art on peer search/browse hits | med | richer peer tiles |
+| Cover art on peer browse/search hits | med | last missing piece of peer tiles (media tags + dates already carried) |
 | Video poster frames | high | needs a frame decoder / ffmpeg |
 | Native device-library integration (SAF dir / virtual FS) | high | see §above + `FEATURE-VIRTUAL-FILESYSTEM.md` |
 

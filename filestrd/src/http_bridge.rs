@@ -57,6 +57,11 @@ struct FileItem {
     name: String,
     hash: String,
     size: u64,
+    /// File mtime (seconds since the epoch); omitted when unknown (0), so a
+    /// consumer falls back rather than showing 1970. Lets the player show a
+    /// real date and a stable sort, instead of "just now" on every fetch.
+    #[serde(skip_serializing_if = "is_zero")]
+    mtime: u64,
     /// "local" or a peer label / short node id — informational only.
     source: String,
     /// Media metadata (duration/tags); omitted entirely when empty.
@@ -70,6 +75,10 @@ struct FileItem {
 
 fn is_false(b: &bool) -> bool {
     !*b
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
 }
 
 /// Per-peer reachability for one aggregation pass (mirrors the `peers` array in
@@ -232,6 +241,7 @@ async fn collect_files(state: &Arc<State>) -> Result<(Vec<FileItem>, Vec<PeerSta
                 name: e.path,
                 hash: e.hash,
                 size: e.size,
+                mtime: e.mtime,
                 source: "local".into(),
                 media: e.media,
                 thumb,
@@ -313,6 +323,7 @@ async fn collect_files(state: &Arc<State>) -> Result<(Vec<FileItem>, Vec<PeerSta
                 name: e.path,
                 hash: e.hash,
                 size: e.size,
+                mtime: e.mtime,
                 source: label.clone(),
                 media: e.media,
                 thumb,
@@ -573,7 +584,7 @@ async fn search_files(state: &Arc<State>, query: &str, is_head: bool) -> Result<
                 Err(_) => break,   // overall deadline
             };
             let search::Hit { file, source } = hit;
-            let libfilestr::ctl::FileEntry { path: name, size, hash, media } = file;
+            let libfilestr::ctl::FileEntry { path: name, size, hash, mtime, media } = file;
             let src = match source {
                 search::HitSource::Local => "local".to_string(),
                 search::HitSource::Upstream { peer, handle } => {
@@ -590,6 +601,7 @@ async fn search_files(state: &Arc<State>, query: &str, is_head: bool) -> Result<
                 name,
                 hash,
                 size,
+                mtime,
                 source: src,
                 media,
                 thumb: false,

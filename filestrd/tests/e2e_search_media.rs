@@ -46,4 +46,8 @@ async fn federated_search_carries_media_across_hops() {
     assert_eq!(hit.media.title.as_deref(), Some("Cathedral"), "title tag dropped");
     let dur = hit.media.duration_secs.expect("duration dropped on the federated hit");
     assert!((1.8..2.3).contains(&dur), "federated duration {dur} (want ~2.0)");
+
+    // the file's mtime also survives both hops, so a consumer can show a real
+    // date / stable sort instead of "just now"
+    assert!(hit.mtime > 1_600_000_000, "mtime not propagated on the federated hit: {}", hit.mtime);
 }

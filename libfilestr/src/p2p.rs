@@ -193,6 +193,7 @@ mod tests {
                 path: "song.flac".into(),
                 size: 1,
                 hash: "aa".into(),
+                mtime: 0,
                 media: crate::ctl::MediaMeta::default(),
             },
             handle: "hh".into(),
@@ -212,6 +213,7 @@ mod tests {
                 path: "track.mp3".into(),
                 size: 10,
                 hash: "bb".into(),
+                mtime: 1_700_000_000,
                 media: crate::ctl::MediaMeta {
                     duration_secs: Some(123.0),
                     artist: Some("Curtis".into()),
@@ -223,5 +225,7 @@ mod tests {
         let value = serde_json::to_value(&hit).unwrap();
         assert_eq!(value["file"]["media"]["duration_secs"], 123.0);
         assert_eq!(value["file"]["media"]["artist"], "Curtis");
+        // mtime rides along too, so a multi-hop hit can show a real date.
+        assert_eq!(value["file"]["mtime"], 1_700_000_000u64);
     }
 }

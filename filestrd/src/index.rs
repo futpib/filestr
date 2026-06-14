@@ -99,6 +99,7 @@ impl Index {
                 path: f.path.clone(),
                 size: f.size,
                 hash: f.hash.clone(),
+                mtime: f.mtime,
                 media: f.media.clone(),
             })
             .collect()
